@@ -72,6 +72,8 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private var tintColor = 0
     private var tintAnim: android.animation.ValueAnimator? = null
     private lateinit var header: FrameLayout
+    /** The top-right status row (clock, network, control centre, avatar); it rides with the dock. */
+    private lateinit var icons: LinearLayout
     private lateinit var clockText: TextView
     /** The large clock top left, with the date above it ([Prefs.CLOCK_LARGE]). */
     private lateinit var bigClock: LinearLayout
@@ -326,7 +328,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         clockText = text(14f, weight = 600).apply {
             setShadowLayer(dp(5).toFloat(), 0f, dp(1).toFloat(), Color.argb(140, 0, 0, 0))
         }
-        val icons = LinearLayout(this).apply {
+        icons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             clipChildren = false
@@ -388,7 +390,9 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 // The dock row rests at the bottom; any other row is brought up to the expanded position.
                 val row = getPosition(child) / cols
                 val wantedOffset = if (row == 0) 0 else firstRowY + row * rowPitch - expandedRowY
-                val dy = wantedOffset - scrollY
+                // Ask the rows where the grid really is: the cached counter can be stale mid-layout.
+                val current = gridOffset() ?: scrollY
+                val dy = wantedOffset - current
                 if (dy != 0) parent.smoothScrollBy(0, dy, Motion.ease, 360)
                 return true
             }
@@ -405,25 +409,14 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             }
         })
         grid.addOnScrollListener(object : RecyclerView.OnScrollListener() {
-            override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
-                // Measured from the rows themselves: layouts and jumps (reloads, scrollToPosition)
-                // move the grid with dy = 0, so a running sum of dy drifts away from the truth.
-                scrollY = gridOffset() ?: (scrollY + dy)
-                val off = scrollY.toFloat()
-                // Keep the glass with the first row and sample the wallpaper at its current position.
-                val expansion = (off / (rowPitch * 0.7f)).coerceIn(0f, 1f)
-                dock.translationY = -off
-                icons.translationY = -off
-                // Off-screen controls must also leave remote-control focus navigation.
-                icons.visibility = if (off > 0f && off >= icons.bottom) View.INVISIBLE else View.VISIBLE
-                dock.alpha = 1f
-                frost.alpha = expansion
-                if (off > 0f) { setDockImage(scrollGlass, scrollGlass); scrollGlass.invalidateSelf() }
-                else setDockImage(dockShown, dockShown)
-                // The large clock gives way to the rows coming up under it.
-                if (!shelfShown) bigClock.alpha = 1f - expansion
-            }
+            override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) = syncDock(dy.toFloat())
         })
+        // A layout (a tile move in edit mode, a reload, a scroll interrupted by rebinding) can
+        // leave the grid somewhere no scroll callback reported. Re-derive the dock from the
+        // rows that were actually laid out, or the glass stays at the top with its tiles below.
+        grid.viewTreeObserver.addOnGlobalLayoutListener {
+            if (!isFinishing && !isDestroyed) syncDock()
+        }
         scene.addView(grid, match())
         header.bringToFront()
         setContentView(root)
@@ -707,6 +700,30 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         val child = grid.getChildAt(0) ?: return null
         val p = grid.getChildAdapterPosition(child).takeIf { it >= 0 } ?: return null
         return firstRowY + (p / cols) * rowPitch - lm.getDecoratedTop(child)
+    }
+
+    /**
+     * Places the dock glass and the status row exactly where the laid-out grid is. The offset is
+     * derived from the rows themselves instead of from a running scroll counter: a counter can
+     * miss an update when a layout (tile move, reload, scroll interrupted by rebinding) moves the
+     * grid without a scroll event, which left the glass at the top and its tiles at the bottom.
+     */
+    private fun syncDock(scrollDelta: Float = 0f) {
+        if (!::dock.isInitialized) return
+        val off = (gridOffset() ?: (scrollY + scrollDelta.toInt())).toFloat()
+        scrollY = off.toInt()
+        // Keep the glass with the first row and sample the wallpaper at its current position.
+        val expansion = (off / (rowPitch * 0.7f)).coerceIn(0f, 1f)
+        dock.translationY = -off
+        icons.translationY = -off
+        // Off-screen controls must also leave remote-control focus navigation.
+        icons.visibility = if (off > 0f && off >= icons.bottom) View.INVISIBLE else View.VISIBLE
+        dock.alpha = 1f
+        frost.alpha = expansion
+        if (off > 0f) { setDockImage(scrollGlass, scrollGlass); scrollGlass.invalidateSelf() }
+        else setDockImage(dockShown, dockShown)
+        // The large clock gives way to the rows coming up under it.
+        if (!shelfShown) bigClock.alpha = 1f - expansion
     }
 
     private fun focusAt(pos: Int) {
@@ -995,7 +1012,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         adapter.movingPkg = null
         adapter.notifyItemChanged(pos)
         prefs.order = adapter.apps.map { it.pkg }
-        grid.post { focusAt(pos) }
+        grid.post { syncDock(); focusAt(pos) }
     }
 
     // ------------------------------------------------------------ overlays / keys
@@ -1028,6 +1045,8 @@ class HomeActivity : Activity(), TileAdapter.Listener {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         restartIdle()
+        // Any key heals a dock left behind by an interrupted animation before it is acted on.
+        if (event.action == KeyEvent.ACTION_DOWN) syncDock()
         // Any key skips the intro to its closing zoom; nothing behind it reacts meanwhile.
         intro?.let { if (event.action == KeyEvent.ACTION_UP) it.skip(); return true }
         val code = event.keyCode
@@ -1064,7 +1083,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         focusedPos = 0
         // Scroll by our own offset: smoothScrollToPosition aligns to the padding and leaves the grid off its resting place.
         grid.smoothScrollBy(0, -scrollY, Motion.ease, 360)
-        grid.postDelayed({ focusAt(0) }, 400)
+        grid.postDelayed({ syncDock(); focusAt(0) }, 400)
     }
 
     override fun onStart() {
@@ -1087,6 +1106,8 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         restartIdle()
         applyBackground()
         updateNetworkIcon()
+        // Coming back from an app or a dialog may not deliver a scroll callback; heal the dock.
+        syncDock()
         main.removeCallbacks(ticker)
         ticker.run()
         control.refresh()
