@@ -280,6 +280,7 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
         intro?.finish()
         runCatching { unregisterReceiver(screenOn) }
         adapter.release()
+        folderView?.release()
         io.shutdown()
         net.shutdown()
         super.onDestroy()
@@ -546,13 +547,15 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
 
     /** The colour wash as the dock's glass should see it, or null when there is none. Any thread. */
     private fun ambientOverlay(): Drawable? =
-        if (!prefs.appTint) null else ambient.current?.let { BitmapDrawable(resources, it) }
+        if (!prefs.appTint || Device.isLowEnd(this)) null else ambient.current?.let { BitmapDrawable(resources, it) }
 
     /** The wash moved on while the dock was out of sight (the grid scrolled up); bake when it returns. */
     private var dockStale = false
 
     private fun scheduleDockBake(delay: Long) {
         main.removeCallbacks(rebake)
+        // A bake is 100-300 ms of CPU and ~15 MB of short-lived buffers: weak TVs keep the plain wallpaper glass.
+        if (Device.isLowEnd(this)) return
         if (scrollY > 0) { dockStale = true; return }
         main.postDelayed(rebake, delay)
     }
@@ -629,7 +632,7 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
             val items = Shelf.items(pkg)
             val first = items.firstOrNull()?.let { Shelf.image(this, it.image) }
             main.post {
-                if (shelfPkg != pkg || first == null || control.isOpen) return@post
+                if (shelfPkg != pkg || first == null || control.isOpen || !grid.hasFocus()) return@post
                 shelfItems = items
                 shelfSource.text = Shelf.sourceName(pkg)
                 shelfDots.removeAllViews()
@@ -800,7 +803,8 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
                 grid.post {
                     // On first show the header buttons grab default focus; the grid should have it.
                     val headerOk = header.hasFocus() && !firstFocus
-                    if ((forceFocus || (!grid.hasFocus() && !headerOk)) && sheets.isEmpty() && !control.isOpen && folderView == null) focusAt(idx)
+                    val overlay = folderView != null || chartsView != null || weatherSheet != null || widgets.hasFocus()
+                    if ((forceFocus || (!grid.hasFocus() && !headerOk)) && sheets.isEmpty() && !control.isOpen && !overlay) focusAt(idx)
                     firstFocus = false
                     // A new list can leave the grid between rows; put the focused row back where it belongs.
                     grid.post { grid.focusedChild?.let { grid.layoutManager?.requestChildRectangleOnScreen(grid, it, Rect(), false, true) } }
@@ -1089,7 +1093,9 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
         }
         if (dy < 0 && pos < cols) {
             // Up from the first row reaches the widget above, or the buttons in the top-right corner.
-            nearestWidget(cell)?.requestFocus() ?: ccButton.requestFocus()
+            val widget = nearestWidget(cell)
+            // A Top Shelf still on its way would hide the widgets under the focus.
+            if (widget != null) { hideShelf(); widget.requestFocus() } else ccButton.requestFocus()
             return true
         }
         if (atEdge) {
@@ -1134,6 +1140,8 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
             val folder = folderView
             when {
                 folder != null && folder.isOpen -> { folder.setBlocked(false); folder.refocus() }
+                weatherSheet != null -> weatherSheet?.root?.requestFocus()
+                chartsView != null -> chartsView?.root?.requestFocus()
                 control.isOpen -> control.refocus()
                 folder == null -> {
                     setGridBlocked(false)

@@ -108,6 +108,8 @@ class TileCell(ctx: Context, val tileW: Int, val tileH: Int) : FrameLayout(ctx) 
         focusedNow = f
         tvosNow = tvos
         stopIdle()
+        // A press still springing back would otherwise outlast this and leave the tile enlarged.
+        pressTween.cancel()
         val s0 = card.scaleX
         val s1 = if (f) FOCUS_SCALE else 1f
         // Draw the lifted tile (and its shadow) above its neighbours.
@@ -182,7 +184,8 @@ class TileCell(ctx: Context, val tileW: Int, val tileH: Int) : FrameLayout(ctx) 
     override fun setPressed(pressed: Boolean) {
         val was = isPressed
         super.setPressed(pressed)
-        if (pressed == was || !focusedNow) return
+        // Losing focus releases the press before the focus listener runs: by then isFocused is false.
+        if (pressed == was || !isFocused) return
         val s0 = card.scaleX
         val s1 = if (pressed) FOCUS_SCALE * 0.95f else FOCUS_SCALE
         pressTween.start(if (pressed) 120 else 420, if (pressed) Motion.ease else Motion.spring) { p ->

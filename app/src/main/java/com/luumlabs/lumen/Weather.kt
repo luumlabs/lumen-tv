@@ -42,7 +42,11 @@ object WeatherData {
     )
 
     private const val TTL = 30 * 60_000L
+    private const val BACKOFF = 10 * 60_000L
     @Volatile private var memo: Now? = null
+    /** The city setting the last answer was fetched for ("" for automatic). */
+    @Volatile private var memoQuery: String? = null
+    @Volatile private var failedAt = 0L
 
     /** Whether temperatures are in Fahrenheit: by setting, or where the country uses them. */
     fun fahrenheit(ctx: Context): Boolean = when (Prefs(ctx).weatherUnit) {
@@ -54,17 +58,22 @@ object WeatherData {
     /** The last weather known, without waiting: memory, then disk. */
     fun cached(ctx: Context): Now? = memo ?: runCatching {
         val f = file(ctx)
-        if (!f.isFile) null else parse(JSONObject(f.readText()), Prefs(ctx).clock24)
+        if (!f.isFile) null else JSONObject(f.readText()).let { o ->
+            memoQuery = o.optString("lumen_query", "")
+            parse(o, Prefs(ctx).clock24)
+        }
     }.getOrNull()?.also { memo = it }
 
     /** Blocking. Fresh weather when the last is older than half an hour (or [force]); null offline with nothing kept. */
     fun load(ctx: Context, force: Boolean = false): Now? {
         val last = cached(ctx)
         val f = fahrenheit(ctx)
-        val city = Prefs(ctx).weatherCity
-        val samePlace = city.isEmpty() || last?.city.equals(city, ignoreCase = true)
+        val query = Prefs(ctx).weatherCity
+        // Compared with the setting it was fetched for: the geocoder's name for a city may differ ("NYC").
+        val samePlace = (memoQuery ?: query) == query
         if (!force && last != null && samePlace && System.currentTimeMillis() - last.at < TTL && (last.unit == "°F") == f) return last
-        val place = Geo.place(ctx) ?: return last
+        if (!force && samePlace && System.currentTimeMillis() - failedAt < BACKOFF) return last
+        val place = Geo.place(ctx) ?: run { failedAt = System.currentTimeMillis(); return last }
         return try {
             val unit = if (f) "&temperature_unit=fahrenheit&wind_speed_unit=mph" else ""
             val url = "https://api.open-meteo.com/v1/forecast?latitude=${place.lat}&longitude=${place.lon}" +
@@ -73,11 +82,12 @@ object WeatherData {
                 "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
                 "&timezone=auto&forecast_days=7$unit"
             val o = JSONObject(Net.get(url).decodeToString())
-            o.put("lumen_city", place.city).put("lumen_at", System.currentTimeMillis()).put("lumen_f", f)
+            o.put("lumen_city", place.city).put("lumen_at", System.currentTimeMillis()).put("lumen_f", f).put("lumen_query", query)
             file(ctx).writeText(o.toString())
-            parse(o, Prefs(ctx).clock24).also { memo = it }
+            parse(o, Prefs(ctx).clock24).also { memo = it; memoQuery = query; failedAt = 0L }
         } catch (e: Exception) {
             android.util.Log.w("Weather", "load failed: ${e.message}")
+            failedAt = System.currentTimeMillis()
             last
         }
     }

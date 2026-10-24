@@ -143,6 +143,31 @@ class Tween : android.view.Choreographer.FrameCallback {
     }
 }
 
+/**
+ * Brings [views] in one after another, [stagger] ms apart: each fades up to [alphaOf] and slides in
+ * from ([dx], [dy]). One [Tween] drives them all rather than each view's animate(), which a focus
+ * zoom ([tweenScale]) cancels, and a button focused straight away would have stayed invisible.
+ */
+fun staggerIn(
+    views: List<View>, delay: Long, stagger: Long, each: Long, dx: Float = 0f, dy: Float = 0f,
+    alphaOf: (View) -> Float = { 1f }, onFrame: (() -> Unit)? = null,
+): Tween {
+    views.forEach { it.alpha = 0f; it.translationX = dx; it.translationY = dy }
+    val total = delay + stagger * (views.size - 1).coerceAtLeast(0) + each
+    return Tween().also { t ->
+        t.start(total, android.view.animation.LinearInterpolator()) { p ->
+            val ms = p * total
+            views.forEachIndexed { k, v ->
+                val e = Motion.emphasized.getInterpolation(((ms - delay - k * stagger) / each).coerceIn(0f, 1f))
+                v.alpha = alphaOf(v) * e
+                v.translationX = dx * (1 - e)
+                v.translationY = dy * (1 - e)
+            }
+            onFrame?.invoke()
+        }
+    }
+}
+
 /** Linear interpolation, for animating between a start and an end value. */
 fun lerp(a: Float, b: Float, f: Float) = a + (b - a) * f
 
@@ -288,6 +313,7 @@ class Sheet(private val host: FrameLayout) {
     }
     private var onDismiss: (() -> Unit)? = null
     private var dismissing = false
+    private var entrance: Tween? = null
 
     init {
         root.addView(frost, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -331,13 +357,7 @@ class Sheet(private val host: FrameLayout) {
         col.scaleX = 0.92f; col.scaleY = 0.92f; col.alpha = 0f
         col.tweenScale(1f, 520, Motion.spring) { col.alpha = ((col.scaleX - 0.92f) / 0.08f).coerceIn(0f, 1f) }
         // The capsules follow one another in, a few frames apart.
-        for (k in 0 until buttons.childCount) {
-            val b = buttons.getChildAt(k)
-            b.alpha = 0f
-            b.translationY = ctx.dp(14).toFloat()
-            b.animate().alpha(1f).translationY(0f).setStartDelay(40L + k * 28L).setDuration(360)
-                .setInterpolator(Motion.emphasized).start()
-        }
+        entrance = staggerIn((0 until buttons.childCount).map { buttons.getChildAt(it) }, 40, 28, 360, dy = ctx.dp(14).toFloat())
         (0 until buttons.childCount).map { buttons.getChildAt(it) }.firstOrNull { it is PillButton }?.requestFocus()
         return this
     }
@@ -347,6 +367,9 @@ class Sheet(private val host: FrameLayout) {
     fun dismiss() {
         if (!isShowing || dismissing) return
         dismissing = true
+        // The entrance may still be running; it would fight the exit for the same properties.
+        entrance?.cancel()
+        (col.getTag(R.id.motion_focus) as? Tween)?.cancel()
         col.animate().scaleX(0.96f).scaleY(0.96f).alpha(0f).setDuration(150).setInterpolator(Motion.exit).start()
         root.animate().alpha(0f).setDuration(180).setStartDelay(30).withEndAction {
             host.removeView(root)

@@ -46,7 +46,7 @@ class RankedPoster(ctx: Context, val posterW: Int, val posterH: Int, private val
     val numeralW = (posterW * 0.5f).toInt()
     private val shadowPad = dp(18)
     private val shadow = ImageView(ctx).apply {
-        setImageBitmap(LiquidGlass.shadow(posterW, posterH, dp(10).toFloat(), shadowPad))
+        setImageBitmap(shadowFor(posterW, posterH, dp(10).toFloat(), shadowPad))
         alpha = 0f
     }
     val card = FrameLayout(ctx)
@@ -70,6 +70,14 @@ class RankedPoster(ctx: Context, val posterW: Int, val posterH: Int, private val
         card.clipRounded(dp(10).toFloat())
         addView(card, LayoutParams(posterW, posterH).apply { leftMargin = numeralW })
         numeral.alpha = 0.8f
+    }
+
+    companion object {
+        private val shadows = HashMap<Long, Bitmap>()
+
+        /** One blurred shadow per poster size, shared: drawing one takes a software blur. */
+        fun shadowFor(w: Int, h: Int, radius: Float, pad: Int): Bitmap =
+            shadows.getOrPut(w.toLong() shl 32 or h.toLong()) { LiquidGlass.shadow(w, h, radius, pad) }
     }
 
     /** Two figures ("10") are set smaller, so they fit the same space as one. */
@@ -121,12 +129,13 @@ class ChartsWidget(ctx: Context, source: GlassSource, w: Int, h: Int) : WidgetCa
     private var rotating = false
     private val turn = object : Runnable {
         override fun run() {
-            if (!rotating || charts.size < 2) return
-            // Hold still while the user is on it.
-            if (!isFocused) turnTo((current + 1) % charts.size)
+            if (!rotating) return
+            // Hold still while the user is on it, or while there is nothing to turn to.
+            if (!isFocused && charts.size > 1) turnTo((current + 1) % charts.size)
             main.postDelayed(this, ROTATE_MS)
         }
     }
+    private var pending: Runnable? = null
 
     init {
         contentDescription = "Top 10"
@@ -150,6 +159,8 @@ class ChartsWidget(ctx: Context, source: GlassSource, w: Int, h: Int) : WidgetCa
 
     /** Shows [list], or the loading line (or [failed]'s message) while there is none. */
     fun show(list: List<Charts.Chart>?, failed: Boolean = false) {
+        pending?.let { main.removeCallbacks(it) }
+        pending = null
         charts = list.orEmpty()
         val has = charts.isNotEmpty()
         empty.visibility = if (has) View.GONE else View.VISIBLE
@@ -181,14 +192,17 @@ class ChartsWidget(ctx: Context, source: GlassSource, w: Int, h: Int) : WidgetCa
         if (charts.isEmpty()) return
         header.animate().alpha(0f).setDuration(160).start()
         posters.forEachIndexed { k, rp -> rp.animate().alpha(0f).translationX(-dp(14).toFloat()).setStartDelay(k * 25L).setDuration(180).start() }
-        main.postDelayed({
-            render(i)
+        pending?.let { main.removeCallbacks(it) }
+        pending = Runnable {
+            pending = null
+            // The charts may have been replaced, with fewer of them, since the turn began.
+            if (charts.isNotEmpty()) render(i.coerceIn(0, charts.size - 1))
             header.animate().alpha(1f).setDuration(320).start()
             posters.forEachIndexed { k, rp ->
                 rp.translationX = dp(18).toFloat()
                 rp.animate().alpha(1f).translationX(0f).setStartDelay(k * 40L).setDuration(420).setInterpolator(Motion.emphasized).start()
             }
-        }, 260)
+        }.also { main.postDelayed(it, 260) }
     }
 
     fun start() {
@@ -200,6 +214,8 @@ class ChartsWidget(ctx: Context, source: GlassSource, w: Int, h: Int) : WidgetCa
     fun stop() {
         rotating = false
         main.removeCallbacks(turn)
+        // A turn caught half way finishes at once, so the widget is never left blank.
+        pending?.let { main.removeCallbacks(it); it.run() }
     }
 
     override fun onDetachedFromWindow() {
@@ -245,8 +261,11 @@ class ChartsView(
     /** Holds the two backdrops, so a fade only reorders them and never the scrim or the text. */
     private val backLayer = FrameLayout(ctx)
     private var front = 0
-    /** The apps on this TV, looked up once: matching a streaming service to one runs on every move. */
-    private val apps by lazy { repo.allApps() }
+    /**
+     * The apps on this TV, looked up once in the background (a package-manager query): matching a
+     * streaming service to one runs on every move. Null until it arrives.
+     */
+    @Volatile private var apps: List<AppEntry>? = null
     private val content = FrameLayout(ctx).apply { clipChildren = false; clipToPadding = false }
     private val tabs = TabBar(ctx, charts.map { it.short })
     private val caption = ctx.text(14f, Color.argb(220, 255, 255, 255), weight = 700).apply { letterSpacing = 0.04f }
@@ -305,6 +324,13 @@ class ChartsView(
             leftMargin = side; bottomMargin = ctx.dp(30)
         })
         root.setOnKeyListener { _, code, e -> onKey(code, e) }
+        Thread {
+            val list = repo.allApps()
+            main.post {
+                apps = list
+                if (!closing) charts[chart].items.getOrNull(index)?.let { showProvider(it) }
+            }
+        }.start()
         buildStrip(0)
         tabs.select(chart, animate = false)
     }
@@ -437,7 +463,12 @@ class ChartsView(
         ).joinToString("    ")
         people.text = credits
         people.visibility = if (credits.isEmpty()) View.GONE else View.VISIBLE
-        val app = t.provider?.let { Charts.providerApp(apps, it) }
+        showProvider(t)
+    }
+
+    /** Where [t] streams, and whether that app is here to open. */
+    private fun showProvider(t: Charts.Title) {
+        val app = t.provider?.let { p -> apps?.let { Charts.providerApp(it, p) } }
         provider.text = when {
             t.provider == null -> ""
             app != null -> "▶  Open in ${app.label}"

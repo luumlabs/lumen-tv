@@ -60,6 +60,9 @@ object Charts {
     private const val ENDPOINT = "https://apis.justwatch.com/graphql"
     private const val LEVELS = 5
     @Volatile private var memo: Pair<Long, List<Chart>>? = null
+    /** When the last load failed: the next waits a while instead of trying again every minute. */
+    @Volatile private var failedAt = 0L
+    private const val BACKOFF = 20 * 60_000L
 
     /** The charts known without waiting: memory, then disk; null before the first successful load. */
     fun cached(ctx: Context): List<Chart>? = memo?.second ?: runCatching {
@@ -76,6 +79,7 @@ object Charts {
         val sp = ctx.getSharedPreferences("charts", Context.MODE_PRIVATE)
         val sameCountry = sp.getString("country", country) == country
         if (!force && last != null && sameCountry && System.currentTimeMillis() - at < TTL) return last
+        if (!force && System.currentTimeMillis() - failedAt < BACKOFF) return last
         return try {
             // JustWatch doesn't cover every country; the US charts beat none.
             val movies = runCatching { fetch(ctx, country, "MOVIE") }.getOrElse { if (country == "US") throw it else fetch(ctx, "US", "MOVIE") }
@@ -83,9 +87,10 @@ object Charts {
             file(ctx, "movie").writeText(movies.toString())
             file(ctx, "show").writeText(shows.toString())
             sp.edit().putString("country", country).apply()
-            build(parse(movies), parse(shows)).also { memo = System.currentTimeMillis() to it }
+            build(parse(movies), parse(shows)).also { memo = System.currentTimeMillis() to it; failedAt = 0L }
         } catch (e: Exception) {
             Log.w("Charts", "load failed: ${e.message}")
+            failedAt = System.currentTimeMillis()
             last
         }
     }
@@ -124,8 +129,9 @@ object Charts {
                 }
                 lastError = java.io.IOException(o.optJSONArray("errors")?.optJSONObject(0)?.optString("message") ?: "no titles")
             } catch (e: java.io.IOException) {
-                // A rejected query answers 400 with the GraphQL errors; anything else is the network.
-                if (e.message?.contains("HTTP 4") != true) throw e
+                // A rejected query answers 400 (or 422) with the GraphQL errors. Anything else, a 403
+                // or 429 included, is the network or a refusal, and a simpler query won't help.
+                if (e.message?.startsWith("HTTP 400") != true && e.message?.startsWith("HTTP 422") != true) throw e
                 lastError = e
             }
             Log.w("Charts", "level $level rejected: ${lastError?.message}")

@@ -93,20 +93,25 @@ object Geo {
     data class Place(val lat: Double, val lon: Double, val city: String, val country: String)
 
     private const val TTL = 12 * 60 * 60_000L
-    @Volatile private var memo: Pair<Long, Place>? = null
+    /** The last place found, when, and for which city setting ("" for automatic). */
+    @Volatile private var memo: Triple<Long, Place, String>? = null
+    @Volatile private var failedAt = 0L
 
     /** Blocking. Null when neither the named city nor the IP address can be placed. */
     fun place(ctx: Context): Place? {
         val prefs = Prefs(ctx)
         val named = prefs.weatherCity.trim()
-        memo?.let { (at, p) -> if (System.currentTimeMillis() - at < TTL && (named.isEmpty() || p.city.equals(named, true))) return p }
+        memo?.let { (at, p, forName) -> if (System.currentTimeMillis() - at < TTL && forName == named) return p }
         val sp = ctx.getSharedPreferences("geo", Context.MODE_PRIVATE)
         val cached = sp.getString("place", null)?.let { runCatching { decode(JSONObject(it)) }.getOrNull() }
         val fresh = System.currentTimeMillis() - sp.getLong("at", 0) < TTL
-        if (cached != null && fresh && sp.getString("named", "") == named) return cached.also { memo = System.currentTimeMillis() to it }
+        if (cached != null && fresh && sp.getString("named", "") == named) return cached.also { memo = Triple(sp.getLong("at", 0), it, named) }
+        // Offline, the IP services are not asked again every minute.
+        if (System.currentTimeMillis() - failedAt < 10 * 60_000L) return cached
         val found = (if (named.isNotEmpty()) runCatching { geocode(named) }.getOrNull() else null) ?: fromIp()
+        if (found == null) failedAt = System.currentTimeMillis()
         if (found != null) {
-            memo = System.currentTimeMillis() to found
+            memo = Triple(System.currentTimeMillis(), found, named)
             sp.edit().putString("place", encode(found).toString()).putLong("at", System.currentTimeMillis()).putString("named", named).apply()
             return found
         }
@@ -148,6 +153,7 @@ object Geo {
     /** Forgets where the TV is, so the next [place] looks again. */
     fun forget(ctx: Context) {
         memo = null
+        failedAt = 0L
         ctx.getSharedPreferences("geo", Context.MODE_PRIVATE).edit().clear().apply()
     }
 

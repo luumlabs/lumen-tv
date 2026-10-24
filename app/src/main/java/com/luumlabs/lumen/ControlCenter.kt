@@ -183,6 +183,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
     var isOpen = false
         private set
     private val panelTween = Tween()
+    private var rowsTween: Tween? = null
 
     init {
         // tvOS layout: a square power tile beside two capsules, then a row of round buttons.
@@ -736,15 +737,10 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
             panel.scaleX = lerp(0.94f, 1f, f); panel.scaleY = panel.scaleX
             if (glassStyle) invalidateSurfaces()
         }
-        for (k in 0 until panel.childCount) {
-            val row = panel.getChildAt(k)
-            row.animate().cancel()
-            row.alpha = 0f
-            row.translationX = ctx.dp(16).toFloat()
-            row.animate().alpha(restAlpha(row)).translationX(0f).setStartDelay(30L + k * 24L).setDuration(320)
-                .setInterpolator(Motion.emphasized)
-                .setUpdateListener { if (glassStyle) invalidateSurfaces() }.start()
-        }
+        // Driven by one Tween: a focused slider's zoom would cancel its own animate() half way.
+        rowsTween?.cancel()
+        rowsTween = staggerIn((0 until panel.childCount).map { panel.getChildAt(it) }, 30, 24, 320, dx = ctx.dp(16).toFloat(),
+            alphaOf = { restAlpha(it) }) { if (glassStyle) invalidateSurfaces() }
         memButton.requestFocus()
         host.removeCallbacks(ticker)
         host.post(ticker)
@@ -774,7 +770,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         volume.finishAnimation()
         scrim.animate().alpha(0f).setDuration(160).start()
         panelTween.cancel()
-        for (k in 0 until panel.childCount) panel.getChildAt(k).animate().cancel()
+        rowsTween?.cancel()
         for (k in 0 until panel.childCount) panel.getChildAt(k).apply { alpha = restAlpha(this); translationX = 0f }
         panel.animate().alpha(0f).translationX(ctx.dp(20).toFloat()).scaleX(0.96f).scaleY(0.96f).setDuration(170)
             .setInterpolator(Motion.exit)
@@ -796,6 +792,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         scrim.animate().cancel()
         glowTween.cancel()
         panelTween.cancel()
+        rowsTween?.cancel()
         blur = null
         blurShader = null
         io.shutdown()

@@ -70,6 +70,8 @@ class FolderView(
         setPadding(geometry.side, (sh * 0.3f).toInt(), geometry.side, (sh * 0.18f).toInt())
     }
     private var closing = false
+    /** The tile last focused, focused again when a sheet over the folder goes away. */
+    private var lastFocused = 0
 
     init {
         root.addView(frost, FrameLayout.LayoutParams(-1, -1))
@@ -121,9 +123,13 @@ class FolderView(
 
     fun refocus() {
         if (apps.isEmpty()) { root.requestFocus(); return }
-        val vh = grid.findViewHolderForAdapterPosition(0)
-        (grid.focusedChild ?: vh?.itemView)?.requestFocus() ?: grid.post { grid.findViewHolderForAdapterPosition(0)?.itemView?.requestFocus() }
+        val p = lastFocused.coerceIn(0, apps.size - 1)
+        grid.findViewHolderForAdapterPosition(p)?.itemView?.requestFocus()
+            ?: grid.post { grid.findViewHolderForAdapterPosition(p)?.itemView?.requestFocus() }
     }
+
+    /** Stops the tile loaders at once (the home screen is going away). */
+    fun release() = adapter.release()
 
     /** Blocks D-pad focus inside the folder while a sheet is over it. */
     fun setBlocked(blocked: Boolean) {
@@ -143,7 +149,7 @@ class FolderView(
 
     // ---- tiles ----
 
-    override fun onTileFocused(pos: Int, cell: TileCell) {}
+    override fun onTileFocused(pos: Int, cell: TileCell) { lastFocused = pos }
 
     override fun onTileClicked(pos: Int, cell: TileCell) {
         apps.getOrNull(pos)?.let { callbacks.openFromFolder(it, cell) }
