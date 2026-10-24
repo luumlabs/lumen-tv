@@ -807,7 +807,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
                 // Some firmwares register no HDMI inputs with the TV input framework and keep their
                 // own picker behind a signature permission (Hisense/VIDAA does). Showing a button
                 // that can only say "Can't read the TV's inputs" is worse than hiding it.
-                inputModule.sub.visibility = if (list.isEmpty()) View.GONE else View.VISIBLE
+                inputModule.visibility = if (list.isEmpty()) View.GONE else View.VISIBLE
                 inputModule.sub.text = list.firstOrNull { it.uri == cur }?.name ?: summary
             }
         }
