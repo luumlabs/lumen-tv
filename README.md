@@ -10,8 +10,12 @@ to English and maintained here. See [Credits](#credits) and [NOTICE](NOTICE).
 
 ## Features
 
-- **Liquid Glass dock** with the apps you actually use, and a second row peeking underneath.
-- **Focused app preview** — the selected tile lifts, tilts and catches a highlight.
+- **Liquid Glass dock** with the apps you actually use, and a second row peeking underneath; the
+  glass refracts the colours of the focused app.
+- **Focused app preview** — the selected tile lifts on a spring, tilts, shifts its layers in depth
+  and catches a highlight.
+- **Widgets**: the weather (Open-Meteo) and this week's Top 10 movies and shows (JustWatch), with
+  scores from IMDb, Rotten Tomatoes, TMDB and JustWatch, the cast and where to watch.
 - **Control Center** on the Back key: power, standby, volume, input source, brightness.
 - **Photo frame screensaver** that replaces the built-in one.
 - **Phone uploads**: scan a QR code to set the wallpaper, avatar or boot animation.
