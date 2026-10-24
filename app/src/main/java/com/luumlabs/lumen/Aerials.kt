@@ -95,7 +95,7 @@ class AerialSaver(private val ctx: Context, private val onFail: () -> Unit) : Sa
 
     private val tick = object : Runnable {
         override fun run() {
-            clock.text = SimpleDateFormat("HH:mm", Locale.CHINA).format(Date())
+            clock.text = SimpleDateFormat(if (Prefs(ctx).clock24) "HH:mm" else "h:mm", Locale.US).format(Date())
             val p = player
             val film = p?.currentMediaItem?.mediaId?.let { id -> films.firstOrNull { it.id == id } }
             val text = film?.captionAt((p.currentPosition / 1000).toInt()).orEmpty()

@@ -89,6 +89,7 @@ class SettingsActivity : Activity() {
     private enum class Page(val title: String, val parent: Page?) {
         MAIN("Settings", null),
         APPEARANCE("Appearance", MAIN),
+        WIDGETS("Widgets", MAIN),
         BACKGROUND("Wallpaper & Screen Saver", MAIN),
         INTRO("Boot Animation", MAIN),
         APPS("Apps", MAIN),
@@ -197,6 +198,7 @@ class SettingsActivity : Activity() {
         when (p) {
             Page.MAIN -> main()
             Page.APPEARANCE -> appearance()
+            Page.WIDGETS -> widgets()
             Page.BACKGROUND -> background()
             Page.INTRO -> intro()
             Page.APPS -> apps()
@@ -290,6 +292,9 @@ class SettingsActivity : Activity() {
 
     private fun main() {
         row("Appearance", "Clock, focus animation, Control Center style and the colour behind your apps.", { "" }, chevron = true) { open(Page.APPEARANCE) }
+        row("Widgets", "The weather and this week's Top 10, on glass above the dock.", {
+            listOfNotNull("Weather".takeIf { prefs.widgetWeather }, "Top 10".takeIf { prefs.widgetCharts }).joinToString(", ").ifEmpty { "Off" }
+        }, chevron = true) { open(Page.WIDGETS) }
         row("Wallpaper & Screen Saver", "The home screen background, how often it changes, and the photo frame that shows when the TV is idle.", {
             Backgrounds.THEMES[prefs.background]?.first ?: Wallpapers.label(Wallpapers.sourceFor(prefs.background))
         }, chevron = true) { open(Page.BACKGROUND) }
@@ -350,6 +355,33 @@ class SettingsActivity : Activity() {
         }) {
             prefs.ownIcon = !prefs.ownIcon
             showIcon(icon)
+        }
+    }
+
+    private fun widgets() {
+        section("Weather")
+        row("Weather widget", "The temperature, the sky and the next hours above the dock. Press OK on it for the six-day forecast. Weather data by Open-Meteo.",
+            { onOff(prefs.widgetWeather) }) { prefs.widgetWeather = !prefs.widgetWeather }
+        row("Temperature", "Celsius or Fahrenheit. “Auto” follows the TV's region.", {
+            when (prefs.weatherUnit) { "c" -> "Celsius"; "f" -> "Fahrenheit"; else -> "Auto (${if (WeatherData.fahrenheit(this)) "°F" else "°C"})" }
+        }) { prefs.weatherUnit = when (prefs.weatherUnit) { Prefs.AUTO -> "c"; "c" -> "f"; else -> Prefs.AUTO } }
+        row("Location", "Found from the TV's internet address; press OK to look again. To name a city instead, run: adb shell am broadcast -a com.luumlabs.lumen.CONFIG -n com.luumlabs.lumen/.ConfigReceiver --es weather_city \"Madrid\"", {
+            prefs.weatherCity.ifEmpty { Geo.cachedCity(this)?.let { "Automatic ($it)" } ?: "Automatic" }
+        }) { v ->
+            v.text = "Locating…"
+            io.execute {
+                Geo.forget(applicationContext)
+                val place = Geo.place(applicationContext)
+                if (place != null) WeatherData.load(applicationContext, force = true)
+                runOnUiThread { v.text = place?.let { prefs.weatherCity.ifEmpty { "Automatic (${it.city})" } } ?: "Can't tell where the TV is" }
+            }
+        }
+        section("Top 10")
+        row("Top 10 widget", "This week's most popular movies and shows, and the best reviewed of them, with scores from IMDb, Rotten Tomatoes, TMDB and JustWatch, the cast and where to watch. Press OK on it to browse. Data by JustWatch.",
+            { onOff(prefs.widgetCharts) }) { prefs.widgetCharts = !prefs.widgetCharts }
+        row("Region", "Which country's charts to show. “Auto” uses where the TV is.", { prefs.chartsCountry.ifEmpty { "Auto" } }) {
+            val opts = listOf("", "US", "GB", "CA", "AU", "IE", "ES", "MX", "AR", "CO", "CL", "PE", "BR", "PT", "FR", "DE", "IT", "NL", "SE", "IN", "JP", "KR")
+            prefs.chartsCountry = opts[(opts.indexOf(prefs.chartsCountry).coerceAtLeast(0) + 1) % opts.size]
         }
     }
 

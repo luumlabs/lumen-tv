@@ -158,6 +158,31 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("app_tint", true)
         set(v) = sp.edit().putBoolean("app_tint", v).apply()
 
+    /** The weather widget above the dock (Weather.kt). */
+    var widgetWeather: Boolean
+        get() = sp.getBoolean("widget_weather", true)
+        set(v) = sp.edit().putBoolean("widget_weather", v).apply()
+
+    /** [AUTO] (by country), "c" or "f". */
+    var weatherUnit: String
+        get() = sp.getString("weather_unit", AUTO)!!
+        set(v) = sp.edit().putString("weather_unit", v).apply()
+
+    /** A city for the weather, looked up by name; empty to place the TV by its IP address. */
+    var weatherCity: String
+        get() = sp.getString("weather_city", "")!!
+        set(v) = sp.edit().putString("weather_city", v.trim()).apply()
+
+    /** The Top 10 widget above the dock (Charts.kt). */
+    var widgetCharts: Boolean
+        get() = sp.getBoolean("widget_charts", true)
+        set(v) = sp.edit().putBoolean("widget_charts", v).apply()
+
+    /** Two-letter country whose charts to show; empty for where the TV is. */
+    var chartsCountry: String
+        get() = sp.getString("charts_country", "")!!
+        set(v) = sp.edit().putString("charts_country", v.trim().uppercase(java.util.Locale.US)).apply()
+
     /** [AUTO], [FOCUS_TVOS] (tilt and a gliding highlight) or [FOCUS_SIMPLE] (scale and shadow only). */
     var focusStyle: String
         get() = sp.getString("focus_style", AUTO)!!

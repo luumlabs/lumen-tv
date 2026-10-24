@@ -8,6 +8,7 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 
 /**
  * Top Shelf content. Android TV's own channel API is empty on this TV (none
@@ -119,11 +120,13 @@ object Shelf {
             }
     }
 
+    /** 48.4K, 1.2M, 3B: English short counts (the Chinese originals counted in 万 and 亿). */
     private fun count(n: Long) = when {
-        n >= 100_000_000 -> "%.1f×100M".format(n / 100_000_000.0)
-        n >= 10_000 -> "%.1f×10K".format(n / 10_000.0)
+        n >= 1_000_000_000 -> "%.1fB".format(Locale.US, n / 1_000_000_000.0)
+        n >= 1_000_000 -> "%.1fM".format(Locale.US, n / 1_000_000.0)
+        n >= 1_000 -> "%.1fK".format(Locale.US, n / 1_000.0)
         else -> n.toString()
-    }
+    }.replace(".0", "")
 
     private fun get(url: String): ByteArray {
         val c = URL(url).openConnection() as HttpURLConnection

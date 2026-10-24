@@ -29,6 +29,9 @@ class Ambient(ctx: Context) : FrameLayout(ctx) {
     /** What is on screen now (or about to be, at the end of the fade): the dock's glass refracts it. */
     val current: Bitmap? get() = overBmp ?: underBmp
 
+    /** Called with the picture once a fade has settled (or been cleared): the widgets' glass follows. */
+    var onSettled: ((Bitmap?) -> Unit)? = null
+
     init {
         addView(under, LayoutParams(-1, -1))
         addView(over, LayoutParams(-1, -1))
@@ -47,6 +50,7 @@ class Ambient(ctx: Context) : FrameLayout(ctx) {
         if (underBmp == null) {
             underBmp = next
             under.setImageBitmap(next)
+            onSettled?.invoke(next)
             return true
         }
         overBmp = next
@@ -58,6 +62,7 @@ class Ambient(ctx: Context) : FrameLayout(ctx) {
             overBmp = null
             over.setImageDrawable(null)
             over.alpha = 0f
+            onSettled?.invoke(underBmp)
         }) { p -> over.alpha = p.coerceIn(0f, 1f) }
         return true
     }
@@ -68,6 +73,7 @@ class Ambient(ctx: Context) : FrameLayout(ctx) {
         shown = null
         underBmp = null; overBmp = null
         under.setImageDrawable(null); over.setImageDrawable(null)
+        onSettled?.invoke(null)
     }
 
     private fun blend(a: Bitmap?, b: Bitmap?, t: Float): Bitmap? {
