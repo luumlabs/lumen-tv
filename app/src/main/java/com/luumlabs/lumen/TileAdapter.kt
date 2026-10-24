@@ -21,6 +21,8 @@ class TileCell(ctx: Context, val tileW: Int, val tileH: Int) : FrameLayout(ctx) 
     val image = ImageView(ctx).apply {
         scaleType = ImageView.ScaleType.CENTER_CROP
         setBackgroundColor(Color.argb(60, 255, 255, 255))
+        // A hair of overscan so the parallax drift never exposes an edge.
+        scaleX = 1.06f; scaleY = 1.06f
     }
     val label: TextView = ctx.text(15f, bold = true).apply {
         gravity = Gravity.CENTER
@@ -98,6 +100,16 @@ class TileCell(ctx: Context, val tileW: Int, val tileH: Int) : FrameLayout(ctx) 
         }
         val gx0 = sheen.translationX
         val gy0 = sheen.translationY
+        // Parallax: the artwork starts displaced against the direction of travel and settles back,
+        // so the tile reads as layers with depth instead of a flat card.
+        if (f && tvos) {
+            image.translationX = -fromDx * dp(5f).toFloat()
+            image.translationY = -fromDy * dp(4f).toFloat()
+        }
+        val ix0 = image.translationX
+        val iy0 = image.translationY
+        val ix1 = 0f
+        val iy1 = 0f
         sheen.visibility = if (f && tvos || g0 > 0f) VISIBLE else INVISIBLE
         focusTween.start(if (f) 260 else 170, if (f) Motion.spring else Motion.ease, end = {
             if (!f) sheen.visibility = INVISIBLE
@@ -113,12 +125,14 @@ class TileCell(ctx: Context, val tileW: Int, val tileH: Int) : FrameLayout(ctx) 
             label.alpha = lerp(l0, l1, e)
             sheen.alpha = lerp(g0, g1, e)
             if (f) { sheen.translationX = lerp(gx0, 0f, e); sheen.translationY = lerp(gy0, -tileH * 0.25f, e) }
+            image.translationX = lerp(ix0, ix1, e)
+            image.translationY = lerp(iy0, iy1, e)
         }
     }
 
     companion object {
         const val SHADOW_PAD = 30
-        const val FOCUS_SCALE = 1.12f
+        const val FOCUS_SCALE = 1.14f
         private var shared: android.graphics.Bitmap? = null
 
         /** One shadow bitmap serves every tile. */
