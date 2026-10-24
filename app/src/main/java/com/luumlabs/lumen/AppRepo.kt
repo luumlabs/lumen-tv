@@ -220,20 +220,39 @@ class AppRepo(private val ctx: Context) {
         val base = Palette.from(src).maximumColorCount(12).generate().let {
             it.lightVibrantSwatch ?: it.vibrantSwatch ?: it.dominantSwatch
         }?.rgb ?: Color.rgb(120, 130, 150)
-        c.drawColor(base)
-        // Crop the centre of the icon, stretch it over the tile and blur it.
-        val crop = Bitmap.createBitmap(src, 24, 40, 144, 112)
-        val blurred = Wallpapers.blurred(crop, darken = 0f)
-        p.alpha = 235
-        c.drawBitmap(blurred, null, RectF(-40f, -40f, TILE_W + 40f, TILE_H + 40f), p)
-        p.alpha = 255
+        // Liquid Glass: a diagonal gradient of the app's own colour instead of a blurred crop.
+        // Light at the top-left, the raw dominant colour through the middle, deep at the bottom-right.
+        val light = blend(base, Color.WHITE, 0.42f)
+        val deep = blend(base, Color.BLACK, 0.62f)
+        p.shader = android.graphics.LinearGradient(
+            0f, 0f, TILE_W.toFloat(), TILE_H.toFloat(),
+            intArrayOf(light, base, deep), floatArrayOf(0f, 0.48f, 1f),
+            android.graphics.Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, TILE_W.toFloat(), TILE_H.toFloat(), p)
+        p.shader = null
+        // Specular highlight in the top-left corner, like light catching the glass edge.
+        p.shader = android.graphics.RadialGradient(
+            TILE_W * 0.24f, TILE_H * 0.12f, TILE_W * 0.62f,
+            intArrayOf(Color.argb(96, 255, 255, 255), Color.argb(24, 255, 255, 255), Color.TRANSPARENT),
+            floatArrayOf(0f, 0.55f, 1f), android.graphics.Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, TILE_W.toFloat(), TILE_H.toFloat(), p)
+        p.shader = null
         // A light veil like frosted glass.
-        c.drawColor(Color.argb(22, 255, 255, 255))
+        c.drawColor(Color.argb(18, 255, 255, 255))
         val s = (TILE_H * 0.58f).toInt()
         val dst = RectF(((TILE_W - s) / 2).toFloat(), ((TILE_H - s) / 2).toFloat(),
             ((TILE_W + s) / 2).toFloat(), ((TILE_H + s) / 2).toFloat())
         c.drawBitmap(src, Rect(0, 0, 192, 192), dst, p)
-        crop.recycle(); blurred.recycle(); src.recycle()
+        src.recycle()
+    }
+
+    /** Mixes [color] towards [towards] by [amount] (0 = colour, 1 = target). */
+    private fun blend(color: Int, towards: Int, amount: Float): Int {
+        fun ch(c: Int, shift: Int) = (c shr shift) and 0xFF
+        val r = (ch(color, 16) + (ch(towards, 16) - ch(color, 16)) * amount).toInt()
+        val g = (ch(color, 8) + (ch(towards, 8) - ch(color, 8)) * amount).toInt()
+        val b = (ch(color, 0) + (ch(towards, 0) - ch(color, 0)) * amount).toInt()
+        return Color.rgb(r.coerceIn(0, 255), g.coerceIn(0, 255), b.coerceIn(0, 255))
     }
 
     /** An input tile: a dark glass card with the input glyph and its name, like tvOS's own inputs. */
