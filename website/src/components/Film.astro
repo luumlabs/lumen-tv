@@ -1,0 +1,37 @@
+---
+import { clips } from "../data/site";
+import type { Copy } from "../data/lang";
+
+interface Props {
+  copy: Copy;
+}
+
+const f = Astro.props.copy.film;
+---
+<section class="section film-section" id="film">
+  <div class="wrap">
+    <div class="section-head center reveal">
+      <p class="eyebrow">{f.eyebrow}</p>
+      <h2>{f.title}</h2>
+      <p class="lede">{f.lede}</p>
+    </div>
+    <figure class="film reveal">
+      <video
+        src={clips.trailer.src}
+        poster={clips.trailer.poster}
+        width="1600"
+        height="900"
+        controls
+        playsinline
+        preload="none"
+        aria-label={f.label}
+        aria-describedby="film-music-credit"
+      ></video>
+      <figcaption id="film-music-credit" class="film-credit">
+        Music by <a href="https://www.bensound.com/royalty-free-music">Bensound.com/royalty-free-music</a><br />
+        Artist: Marcus P.<br />
+        License code: 55KIM7QUNXBISK9H
+      </figcaption>
+    </figure>
+  </div>
+</section>

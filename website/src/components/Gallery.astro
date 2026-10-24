@@ -1,0 +1,82 @@
+---
+import { clips } from "../data/site";
+import type { Copy, Locale } from "../data/lang";
+import { uiStrings } from "../data/strings";
+
+interface Props {
+  copy: Copy;
+  locale: Locale;
+}
+
+const { copy, locale } = Astro.props;
+const t = uiStrings[locale];
+const g = copy.gallery;
+
+/* slot: the grid cell (two wide ones, then three). A clip plays in place and in the viewer. */
+const items = [
+  { slot: "home", clip: clips.intro, label: locale === "zh" ? "开机动画" : "Boot animation", file: "intro.mp4", alt: locale === "zh" ? "项目所有者提供的默认开机动画预览。" : "Preview of the owner-supplied default startup animation." },
+  { slot: "shelf", clip: clips.shelf, label: locale === "zh" ? "顶部内容" : "Top Shelf", file: "shelf.mp4", alt: locale === "zh" ? "Top Shelf 顶部内容实拍。" : "Top Shelf capture." },
+  { slot: "grid", clip: clips.updates, label: locale === "zh" ? "软件更新" : "Software updates", file: "updates.mp4", alt: locale === "zh" ? "软件更新页录屏。" : "Software update page recording." },
+  { slot: "cc", clip: clips.cc, label: locale === "zh" ? "控制中心" : "Control Center", file: "cc.mp4", alt: locale === "zh" ? "控制中心录屏。" : "Control Center recording." },
+  { slot: "frame", clip: clips.aerial, label: locale === "zh" ? "航拍屏保" : "Aerial screensaver", file: "aerial.mp4", alt: locale === "zh" ? "航拍屏保录屏。" : "Aerial screensaver recording." },
+];
+---
+<section class="section gallery-section" id="gallery">
+  <div class="wrap">
+    <div class="section-head center reveal">
+      <p class="eyebrow">{g.eyebrow}</p>
+      <h2>{g.title}</h2>
+      <p class="lede">{g.lede}</p>
+    </div>
+
+    <p class="fine">{locale === "zh" ? "开机动画预览来自项目所有者提供的内置素材。相关商标与版权归原权利人，本项目与 Apple 无关联；未经许可请勿转载或用于其他用途。" : "The startup preview is an owner-supplied bundled asset. Trademarks and copyrights belong to their owners; Tigris is not affiliated with Apple. Do not republish it without permission."}</p>
+    <div class="gallery reveal">
+      {items.map((item) => (
+        <figure class={`g-${item.slot}`}>
+          <button
+            type="button"
+            data-lightbox-open
+            data-full={item.clip.src}
+            data-poster={item.clip.poster}
+            data-video={""}
+            data-caption={item.label}
+            data-alt={item.alt}
+            aria-label={item.label}
+          >
+            <video
+                data-clip
+                src={item.clip.src}
+                poster={item.clip.poster}
+                width="1280"
+                height="720"
+                muted
+                loop
+                playsinline
+                preload="none"
+                aria-label={item.alt}
+              ></video>
+          </button>
+          <figcaption>{item.label} <em>{item.file}</em></figcaption>
+        </figure>
+      ))}
+    </div>
+  </div>
+</section>
+
+<dialog class="lightbox" data-lightbox aria-label={t.viewer}>
+  <div class="lightbox-inner">
+    <button class="lightbox-close" type="button" data-close aria-label={t.close}>
+      <svg aria-hidden="true"><use href="#i-close"></use></svg>
+    </button>
+    <img alt="" hidden />
+    <video autoplay muted loop playsinline preload="metadata" hidden></video>
+    <div class="lightbox-bar">
+      <span data-lightbox-caption></span>
+      <span data-lightbox-counter>1 / {items.length}</span>
+      <span class="nav-btns">
+        <button type="button" data-prev aria-label={t.prev}><svg aria-hidden="true" style="transform:rotate(180deg)"><use href="#i-chevron"></use></svg></button>
+        <button type="button" data-next aria-label={t.next}><svg aria-hidden="true"><use href="#i-chevron"></use></svg></button>
+      </span>
+    </div>
+  </div>
+</dialog>

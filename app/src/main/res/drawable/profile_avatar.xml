@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Apple's default account picture: a grey disc with a white silhouette. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="64dp" android:height="64dp" android:viewportWidth="64" android:viewportHeight="64">
+    <group>
+        <clip-path android:pathData="M32,0a32,32 0,1 1,0 64a32,32 0,1 1,0 -64z" />
+        <path android:pathData="M0,0h64v64h-64z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="32" android:startY="0" android:endX="32" android:endY="64"
+                    android:startColor="#FFA9AEBA" android:endColor="#FF7F848F" />
+            </aapt:attr>
+        </path>
+        <path android:fillColor="#FFFFFFFF"
+            android:pathData="M32,13.5a11,11 0,1 1,0 22a11,11 0,1 1,0 -22z" />
+        <path android:fillColor="#FFFFFFFF"
+            android:pathData="M10.5,64C10.5,49.5 20,40.5 32,40.5C44,40.5 53.5,49.5 53.5,64z" />
+    </group>
+</vector>

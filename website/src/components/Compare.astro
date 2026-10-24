@@ -1,0 +1,60 @@
+---
+import { clips } from "../data/site";
+import type { Copy, Locale } from "../data/lang";
+import { uiStrings } from "../data/strings";
+
+interface Props {
+  copy: Copy;
+  locale: Locale;
+}
+
+const { copy, locale } = Astro.props;
+const t = uiStrings[locale];
+const c = copy.compare;
+---
+<section class="section compare-section" id="compare">
+  <div class="wrap">
+    <div class="section-head center reveal">
+      <p class="eyebrow">{c.eyebrow}</p>
+      <h2>{c.title}</h2>
+      <p class="lede" set:html={c.lede} />
+    </div>
+
+    <div class="compare-wrap reveal">
+      <div class="compare" data-compare>
+        <div class="compare-after">
+          <video data-clip src={clips.home.src} poster={clips.home.poster} width="1280" height="720" muted loop playsinline preload="none" aria-label={c.afterAlt}></video>
+        </div>
+        <div class="compare-before">
+          <video data-clip src={clips.patchwall.src} poster={clips.patchwall.poster} width="1280" height="720" muted loop playsinline preload="none" aria-label={c.beforeAlt}></video>
+        </div>
+
+        <div class="compare-label is-before">{c.beforeLabel}<span>{c.beforeSub}</span></div>
+        <div class="compare-label is-after">{c.afterLabel}<span>{c.afterSub}</span></div>
+
+        <div
+          class="compare-handle"
+          role="slider"
+          tabindex="0"
+          aria-label={t.compareName}
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="50"
+          aria-valuetext={t.compareValue(50)}
+          aria-orientation="horizontal"
+          data-valuetemplate={t.compareValue(0).replace("0", "{p}")}
+        >
+          <div class="grip" aria-hidden="true">
+            <svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 2 6 7l-4 5"></path></svg>
+            <svg viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" style="transform:rotate(180deg)"><path d="M2 2 6 7l-4 5"></path></svg>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="compare-hint reveal">
+      <span>{c.hintKeys}</span>
+      <span>{c.disclaimer}</span>
+    </div>
+  </div>
+</section>

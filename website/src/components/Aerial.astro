@@ -1,0 +1,20 @@
+---
+import { clips } from "../data/site";
+import type { Copy, Locale } from "../data/lang";
+interface Props { copy: Copy; locale: Locale }
+const { copy, locale } = Astro.props;
+const a = copy.aerial;
+---
+<section class="section aerial-section" id="aerial"><div class="wrap">
+  <div class="aerial-head reveal"><p class="eyebrow">{a.eyebrow}</p><h2>{a.title}</h2><p class="lede">{a.lede}</p></div>
+  <div class="aerial-stage reveal"><div class="aerial-glow" aria-hidden="true"></div>
+    <div class="tv-frame aerial-frame"><div class="tv-screen aerial-screen">
+      <video data-clip src={clips.aerial.src} poster={clips.aerial.poster} width="1280" height="720" muted loop playsinline preload="none" aria-label={locale === "zh" ? "电视实录：新西兰上空的地球航拍" : "TV recording: aerial view above New Zealand"}></video>
+      <span class="aerial-badge">{locale === "zh" ? "电视实录 · 航拍正在播放" : "Recorded on TV · aerial playback"}</span>
+    </div></div>
+  </div>
+  <div class="aerial-foot reveal">
+    <p class="aerial-caption">{locale === "zh" ? "在新西兰上空拥抱日出 · Sony BRAVIA 实录" : "Sunrise above New Zealand · Sony BRAVIA recording"}</p>
+    <ul class="aerial-points">{a.bullets.map(b => <li>{b}</li>)}</ul><p class="aerial-attribution">{a.attribution}</p>
+  </div>
+</div></section>

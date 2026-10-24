@@ -1,0 +1,66 @@
+name: Website build
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - 'tools/download-release.py'
+      - '.github/workflows/website.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - 'tools/download-release.py'
+      - '.github/workflows/website.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  website:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: website/pnpm-lock.yaml
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Type-check both locales
+        run: pnpm check
+      - name: Build both locales and install shell route
+        run: pnpm build
+      - name: Validate Releases download entry points and installer helper
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          data = Path("src/data/site.ts").read_text()
+          releases = "https://github.com/lesnolie/Lumen/releases"
+          assert f'apk: "{releases}"' in data
+          assert f'apkGuard: "{releases}"' in data
+          for retired in ("releaseTag", "releases/download/", "releases/latest"):
+              assert retired not in data, retired
+          assert "download-release.py" in data
+          for page in ("dist/index.html", "dist/en/index.html"):
+              html = Path(page).read_text()
+              assert releases in html, f"Missing Releases link in {page}"
+              for retired in ("releases/download/", "releases/latest"):
+                  assert retired not in html, f"Stale download link in {page}: {retired}"
+          redirects = Path("dist/_redirects").read_text()
+          for path in ("/download", "/download-guard"):
+              assert f"{path}  {releases}  302" in redirects, path
+          assert "releases/download/" not in redirects
+          assert Path("dist/install.sh").exists()
+          print("Website Releases entry points and locale routes OK")
+          PY

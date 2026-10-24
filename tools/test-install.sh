@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# Isolated installer contract tests. Never reaches a real adb executable.
+set -euo pipefail
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+TEST=$(mktemp -d)
+trap 'rm -rf "$TEST"' EXIT
+mkdir "$TEST/bin"
+export LOG="$TEST/commands"
+cat > "$TEST/bin/adb" <<'MOCK'
+#!/usr/bin/env bash
+echo "$*" >> "$LOG"
+[[ "$1" == -s ]] && shift 2
+case "$*" in
+  connect*) echo connected ;;
+  get-state) echo device ;;
+  'shell getprop ro.build.version.sdk') echo "${SDK:-31}" ;;
+  'shell getprop ro.product.manufacturer') echo Sony ;;
+  'shell cmd package resolve-activity'*) echo "${RESOLVED_HOME:-com.vendor.home/.Home}" ;;
+  'shell settings get secure screensaver_components') echo "${SAVER:-com.vendor.saver/.Dream}" ;;
+  'shell settings get secure enabled_notification_listeners') echo com.other/.Listener ;;
+  'shell settings get secure enabled_accessibility_services') echo com.other/.Service ;;
+  install*) [[ "${FAIL_INSTALL:-0}" == 0 ]] || { echo INSTALL_FAILED_UPDATE_INCOMPATIBLE >&2; exit 1; }; echo Success ;;
+  'shell dumpsys window') echo 'mCurrentFocus=com.vendor.home/.Home' ;;
+esac
+MOCK
+printf '#!/usr/bin/env bash\nexit 0\n' > "$TEST/bin/sleep"
+chmod +x "$TEST/bin/adb" "$TEST/bin/sleep"
+# Git Bash may see the Windows Store python3 alias rather than installed Python.
+if ! python3 -c 'import sys' >/dev/null 2>&1; then
+  printf '#!/usr/bin/env bash\nexec python "$@"\n' > "$TEST/bin/python3"
+  chmod +x "$TEST/bin/python3"
+fi
+export PATH="$TEST/bin:$PATH" TV=192.168.1.20 APK="$TEST/local.apk" STATE_DIR="$TEST/state"
+printf fake-apk > "$APK"
+bash "$ROOT/install.sh" > "$TEST/output"
+[[ "$(cat "$STATE_DIR/home")" == com.vendor.home/.Home ]]
+grep -q 'install -r' "$LOG"
+! grep -Eq 'uninstall|disable-user|keyevent KEYCODE_POWER' "$LOG"
+echo 'PASS install snapshots original launcher and never removes apps'
+printf com.saved.home/.Home > "$STATE_DIR/home"
+bash "$ROOT/install.sh" > "$TEST/output"
+[[ "$(cat "$STATE_DIR/home")" == com.saved.home/.Home ]]
+echo 'PASS upgrade retains initial snapshot'
+! grep -q -- '--ez keep_adb' "$LOG"
+echo 'PASS omitted keep_adb preserves user preference'
+: > "$LOG"
+KEEP_ADB=1 bash "$ROOT/install.sh" > "$TEST/output"
+grep -q -- '--ez keep_adb true' "$LOG"
+: > "$LOG"
+KEEP_ADB=0 bash "$ROOT/install.sh" > "$TEST/output"
+grep -q -- '--ez keep_adb false' "$LOG"
+echo 'PASS explicit keep_adb changes still apply'
+: > "$LOG"
+RESOLVED_HOME=com.luumlabs.lumen/.HomeActivity bash "$ROOT/install.sh" > "$TEST/output"
+! grep -q 'am broadcast' "$LOG"
+echo 'PASS native HOME upgrade with no configuration skips empty broadcast'
+: > "$LOG"
+if FAIL_INSTALL=1 bash "$ROOT/install.sh" > "$TEST/output" 2>&1; then exit 1; fi
+! grep -Eq 'uninstall|pm grant|set-home-activity|am broadcast' "$LOG"
+echo 'PASS signature mismatch stops before configuration without uninstall'
+: > "$LOG"
+SAVER=com.luumlabs.lumen/.PhotoFrame bash "$ROOT/install.sh" restore > "$TEST/output"
+grep -q 'set-home-activity com.saved.home/.Home' "$LOG"
+grep -q 'settings put secure screensaver_components com.vendor.saver/.Dream' "$LOG"
+! grep -Eq 'uninstall|settings put secure enabled_accessibility_services' "$LOG"
+echo 'PASS restore retains app and other accessibility services'
+: > "$LOG"
+bash "$ROOT/install.sh" restore --uninstall > "$TEST/output"
+grep -q 'uninstall com.luumlabs.lumen' "$LOG"
+echo 'PASS explicit uninstall supported'
+: > "$LOG"
+if STATE_DIR="$TEST/missing" bash "$ROOT/install.sh" restore > "$TEST/output" 2>&1; then exit 1; fi
+! grep -Eq 'am broadcast|set-home-activity|uninstall' "$LOG"
+echo 'PASS missing snapshot stops without changing TV'
+: > "$LOG"
+if SDK=26 bash "$ROOT/install.sh" > "$TEST/output" 2>&1; then exit 1; fi
+! grep -q 'install -r' "$LOG"
+echo 'PASS unsupported Android blocked'
+cat > "$TEST/bin/curl" <<'MOCK'
+#!/usr/bin/env bash
+url=$2
+out=$4
+tag=${MOCK_RELEASE_TAG:-v2.0.6}
+if [[ "${MOCK_LEGACY:-0}" == 1 ]]; then
+  standard=Lumen.apk
+  guard=Lumen-guard.apk
+  checksums=SHA256SUMS.txt
+else
+  standard="Lumen-$tag.apk"
+  guard="Lumen-guard-$tag.apk"
+  checksums="SHA256SUMS-$tag.txt"
+fi
+base="https://github.com/lesnolie/Lumen/releases/download/$tag"
+if [[ "$url" == *"api.github.com"* ]]; then
+  printf '{"tag_name":"%s","draft":false,"prerelease":false,"assets":[{"name":"%s","browser_download_url":"%s/%s"},{"name":"%s","browser_download_url":"%s/%s"},{"name":"%s","browser_download_url":"%s/%s"}]}' \
+    "$tag" "$standard" "$base" "$standard" "$guard" "$base" "$guard" "$checksums" "$base" "$checksums" > "$out"
+elif [[ "$url" == *SHA256SUMS* ]]; then
+  hash=$(python3 -c 'import hashlib; print(hashlib.sha256(b"downloaded-apk").hexdigest())')
+  [[ "${BAD_HASH:-0}" == 0 ]] || hash=0000
+  printf '%s  %s\n%s  %s\n' "$hash" "$standard" "$hash" "$guard" > "$out"
+else
+  printf downloaded-apk > "$out"
+fi
+MOCK
+chmod +x "$TEST/bin/curl"
+: > "$LOG"
+APK='' bash "$ROOT/install.sh" > "$TEST/output"
+grep -q 'Lumen-v2.0.6.apk' "$LOG"
+echo 'PASS versioned standard release selected and checksum verified'
+: > "$LOG"
+APK='' bash "$ROOT/install.sh" -s guard > "$TEST/output"
+grep -q 'Lumen-guard-v2.0.6.apk' "$LOG"
+echo 'PASS versioned guard release selected and checksum verified'
+: > "$LOG"
+MOCK_LEGACY=1 MOCK_RELEASE_TAG=v2.0.5 VERSION=v2.0.5 APK='' bash "$ROOT/install.sh" > "$TEST/output"
+grep -q 'Lumen.apk' "$LOG"
+echo 'PASS legacy release names still install from exact version tag'
+: > "$LOG"
+if BAD_HASH=1 APK='' bash "$ROOT/install.sh" > "$TEST/output" 2>&1; then exit 1; fi
+! grep -q 'install -r' "$LOG"
+echo 'PASS checksum mismatch blocks installation'

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Lumen TV</string>
+    <string name="settings_name">Home Screen Settings</string>
+    <string name="wallpaper_name">Wallpaper</string>
+    <string name="guard_name">Home Screen Guardian</string>
+    <string name="guard_description">Brings the home screen back when the built-in launcher takes over. Only checks which app is in front; it does not read screen content.</string>
+</resources>

@@ -1,0 +1,162 @@
+---
+import type { Copy, Locale } from "../data/lang";
+import InstallQuick from "./InstallQuick.astro";
+import type { Step } from "../data/interfaces";
+
+interface Props {
+  copy: Copy;
+  locale: Locale;
+}
+
+const { copy, locale } = Astro.props;
+const s = copy.install;
+const dl = locale === "zh" ? "打开 Releases" : "Open Releases";
+---
+<section class="section install" id="install">
+  <div class="wrap">
+    <div class="section-head center reveal">
+      <p class="eyebrow">{s.eyebrow}</p>
+      <h2>{s.title}</h2>
+      <p class="lede">{s.lede}</p>
+    </div>
+
+    <div class="downloads reveal">
+      {s.packages.map((pkg) => (
+        <a class="download" href={pkg.href} rel="noopener">
+          <span class="name">{pkg.name}</span>
+          <span class="use">{pkg.use}</span>
+          <span class="arrow">{dl} <svg aria-hidden="true"><use href="#i-arrow"></use></svg></span>
+        </a>
+      ))}
+    </div>
+
+    <div class="prereq reveal">{s.prereq}</div>
+
+    <div class="agent-card reveal">
+      <h3><svg aria-hidden="true"><use href="#i-terminal"></use></svg>{s.agent.title}</h3>
+      <p>{s.agent.body}</p>
+      <div class="prompt-box">
+        <p id="cmd-agent">{s.agent.prompt}</p>
+        <button class="copy" type="button" data-copy="#cmd-agent">
+          <svg aria-hidden="true"><use href="#i-copy"></use></svg><span class="label"></span>
+        </button>
+      </div>
+      <p class="fine">{s.agent.note}</p>
+    </div>
+
+    <InstallQuick locale={locale} />
+    <details class="manual-install"><summary>{locale === "zh" ? "手动安装 · 按电视品牌查看步骤" : "Manual installation · choose your TV brand"}</summary>
+    <div class="table-wrap brand-table">
+      <table>
+        <caption>{s.adbTable.caption}</caption>
+        <thead>
+          <tr>{s.adbTable.head.map((h) => <th scope="col">{h}</th>)}</tr>
+        </thead>
+        <tbody>
+          {s.adbTable.rows.map((row) => (
+            <tr>
+              <th scope="row">{row[0]}</th>
+              <td set:html={row[1]} />
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+
+    <p class="windows-note">{s.shellNote}</p>
+
+    {/* One switch for every snippet on the page; the choice is remembered. */}
+    <div class="shell-switch" data-shell-switch aria-label={s.shellLabels.posix + " / " + s.shellLabels.powershell}>
+      {(["powershell", "posix"] as const).map((shell, i) => (
+        <button
+          type="button"
+          data-shell={shell}
+          aria-pressed={i === 0 ? "true" : "false"}
+          class:list={{ "is-on": i === 0 }}
+        >{s.shellLabels[shell]}</button>
+      ))}
+      <p class="shell-switch-note">{s.placeholderNote}</p>
+    </div>
+
+    <div class="shell-guide" data-shell-panel="powershell">
+      <h3>{locale === "zh" ? "Windows：打开 PowerShell" : "Windows: open PowerShell"}</h3>
+      <p>{locale === "zh" ? "在开始菜单搜索 PowerShell 并打开。先安装 Android SDK Platform-Tools，并把 adb 加入 PATH；TCL 推送还需要 Python 3。运行下面的检查，再选择电视品牌。" : "Open PowerShell from Start. Install Android SDK Platform-Tools and add adb to PATH; TCL push also requires Python 3. Check the tools, then choose your TV brand."}</p>
+      <div class="code"><pre><code>{"adb version\ncurl.exe --version"}</code></pre></div>
+      <p>{locale === "zh" ? "TCL / 雷鸟还需运行 python --version，确认是 Python 3。" : "For TCL, also run python --version and confirm Python 3."}</p>
+    </div>
+    <div class="shell-guide" data-shell-panel="posix" hidden>
+      <h3>{locale === "zh" ? "macOS / Linux：打开终端" : "macOS / Linux: open Terminal"}</h3>
+      <p>{locale === "zh" ? "先安装 Android SDK Platform-Tools（提供 adb）。TCL 推送还需要 Python 3。运行下面的检查，再按电视品牌逐条执行；不要把这些命令粘贴到 Windows PowerShell。" : "Install Android SDK Platform-Tools for adb. TCL push also requires Python 3. Check the tools, then follow your TV's steps in Terminal."}</p>
+      <div class="code"><pre><code>{"adb version\ncurl --version"}</code></pre></div>
+      <p>{locale === "zh" ? "TCL / 雷鸟还需运行 python3 --version。" : "For TCL, also run python3 --version."}</p>
+    </div>
+    <h3 class="manual-brand-heading">{locale === "zh" ? "选择电视品牌，按顺序执行" : "Choose your TV and follow each step"}</h3>
+    <div class="tabs" data-tabs>
+      <div class="tablist" role="tablist" aria-label={s.tabsLabel}>
+        {s.tabs.map((tab, i) => (
+          <button
+            type="button"
+            role="tab"
+            id={`tab-${tab.id}`}
+            aria-controls={`panel-${tab.id}`}
+            aria-selected={i === 0 ? "true" : "false"}
+            tabindex={i === 0 ? 0 : -1}
+          >{tab.label}</button>
+        ))}
+      </div>
+
+      {s.tabs.map((tab, i) => (
+        <div class="tabpanel" role="tabpanel" id={`panel-${tab.id}`} aria-labelledby={`tab-${tab.id}`} hidden={i !== 0}>
+          <h3>{tab.label}</h3>
+          {tab.intro && <p>{tab.intro}</p>}
+          {tab.danger && (
+            <div class="callout is-danger">
+              <svg aria-hidden="true"><use href="#i-warning"></use></svg>
+              <span set:html={tab.danger} />
+            </div>
+          )}
+          <ol class="steps">
+            {tab.steps.map((step: Step, si) => (
+              <li>
+                <h4>{step.title}</h4>
+                {step.body && <p>{step.body}</p>}
+                {step.cmd && (
+                  <div class="code">
+                    <pre><code id={`cmd-${tab.id}-${si}`} data-cmd={typeof step.cmd === "object" ? JSON.stringify(step.cmd) : undefined}>{typeof step.cmd === "string" ? step.cmd : step.cmd.powershell}</code></pre>
+                    <button class="copy" type="button" data-copy={`#cmd-${tab.id}-${si}`}>
+                      <svg aria-hidden="true"><use href="#i-copy"></use></svg><span class="label"></span>
+                    </button>
+                  </div>
+                )}
+                {step.note && <p class="fine" set:html={step.note} />}
+              </li>
+            ))}
+          </ol>
+        </div>
+      ))}
+    </div>
+
+    <details class="faq advanced reveal">
+      <summary>{s.advanced.title}</summary>
+      <div class="faq-body">
+        <p>{s.advanced.body}</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th scope="col">{locale === "zh" ? "权限" : "Grant"}</th><th scope="col">{locale === "zh" ? "用途" : "Purpose"}</th></tr></thead>
+            <tbody>
+              {s.advanced.rows.map((r) => (
+                <tr><th scope="row">{r.name}</th><td>{r.use}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+
+    </details>
+    <div class="callout is-danger reveal">
+      <svg aria-hidden="true"><use href="#i-warning"></use></svg>
+      <span set:html={s.safety} />
+    </div>
+  </div>
+</section>

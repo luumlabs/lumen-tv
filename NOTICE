@@ -1,0 +1,25 @@
+Lumen TV
+========
+
+Lumen TV is a fork of Tigris.
+
+    Tigris
+    Copyright (c) 2026 lesnolie
+    https://github.com/lesnolie/Tigris
+    Licensed under the MIT License (see LICENSE).
+
+The original project provided the design, the architecture and the vast majority of the
+source code. This fork adds an English translation, a rebranding, and further changes.
+
+Modifications in this repository are Copyright (c) 2026 the Lumen TV contributors,
+also released under the MIT License.
+
+Third-party components
+----------------------
+
+- MiracastReceiver — https://github.com/weekdayjast/MiracastReceiver
+- Aerial screensaver footage and reference — https://github.com/pengchujin/aerial-tv (MIT)
+- AndroidX, Material Components, and other libraries under their respective licences.
+
+Apple TV, tvOS and related marks are trademarks of Apple Inc. This project is not affiliated
+with, endorsed by, or sponsored by Apple.
