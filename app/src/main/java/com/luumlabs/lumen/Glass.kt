@@ -9,6 +9,7 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.drawable.Drawable
+import android.view.View
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -24,20 +25,22 @@ object LiquidGlass {
     /**
      * Bakes a glass slab covering [rect] (screen pixels) over [source], which the
      * screen shows centre-cropped, with [overlay] drawn on top of it in screen
-     * coordinates. Inside, the picture is softly blurred and brightened; towards
-     * the rim it is pulled in from beyond the edge, the way a thick rounded edge
-     * refracts; the rim itself is a thin line lit from the top left and tinted
-     * by what is behind it.
+     * coordinates. Inside, the picture is softly blurred, brightened and made a
+     * little more vivid; towards the rim it is pulled in from beyond the edge, the
+     * way a thick rounded edge refracts, splitting slightly into its colours as
+     * real glass disperses light. The rim is a crisp line lit from the top left
+     * with a soft bevel glow inside it, and the lower edge darkens a touch, which
+     * is what gives the slab its thickness.
      */
     fun bake(source: Bitmap, screenW: Int, screenH: Int, rect: Rect, radius: Float, overlay: Drawable? = null): Bitmap {
         val w = rect.width()
         val h = rect.height()
         // Match Canvas round-rect geometry for capsules, including when the requested radius exceeds half the short side.
         val cornerRadius = radius.coerceIn(0f, min(w, h) / 2f)
-        val zone = min(h * 0.26f, cornerRadius * 1.4f)    // refracting band along the rim
-        val pull = zone * 0.9f                       // how far the rim reaches outside
-        val blurR = 7
-        val margin = (pull + blurR * 2 + 2).toInt()
+        val zone = min(h * 0.3f, cornerRadius * 1.5f)     // refracting band along the rim
+        val pull = zone * 0.95f                       // how far the rim reaches outside
+        val blurR = 6
+        val margin = (pull * 1.15f + blurR * 3 + 2).toInt()
 
         // The part of the screen around the slab, as the user sees it.
         val x0 = rect.left - margin
@@ -58,14 +61,20 @@ object LiquidGlass {
         val src = IntArray(cw * ch)
         region.getPixels(src, 0, cw, 0, 0, cw, ch)
         region.recycle()
-        repeat(2) { boxBlur(src, cw, ch, blurR) }
+        // Three box passes come close to a Gaussian blur: frosted, without the boxy halo of two.
+        repeat(3) { boxBlur(src, cw, ch, blurR) }
 
         val out = IntArray(w * h)
         val hw = w / 2f
         val hh = h / 2f
-        val rimW = 2.2f
+        val rimW = 1.6f
+        val bevel = min(cornerRadius * 0.45f, h * 0.12f).coerceAtLeast(4f)
+        val shade = bevel * 1.4f
         for (j in 0 until h) {
             val py = j + 0.5f
+            // A faint sheen over the upper part, as light falling on a curved top surface.
+            val top = (1f - py / (h * 0.5f)).coerceAtLeast(0f)
+            val sheen = top * top * 0.07f
             for (i in 0 until w) {
                 val px = i + 0.5f
                 // Signed distance to the rounded rectangle (negative inside).
@@ -88,32 +97,82 @@ object LiquidGlass {
 
                 val t = (1f - depth / zone).coerceIn(0f, 1f)
                 val off = t * t * pull
-                val c = sample(src, cw, ch, px + nx * off + margin, py + ny * off + margin)
-                var r = Color.red(c).toFloat()
-                var g = Color.green(c).toFloat()
-                var b = Color.blue(c).toFloat()
+                val sx = px + margin
+                val sy = py + margin
+                var r: Float
+                var g: Float
+                var b: Float
+                if (off > 0.75f) {
+                    // Dispersion: red bends a little less than green, blue a little more.
+                    val cg = sample(src, cw, ch, sx + nx * off, sy + ny * off)
+                    val cr = sample(src, cw, ch, sx + nx * off * 0.9f, sy + ny * off * 0.9f)
+                    val cb = sample(src, cw, ch, sx + nx * off * 1.12f, sy + ny * off * 1.12f)
+                    r = Color.red(cr).toFloat(); g = Color.green(cg).toFloat(); b = Color.blue(cb).toFloat()
+                } else {
+                    val c = sample(src, cw, ch, sx, sy)
+                    r = Color.red(c).toFloat(); g = Color.green(c).toFloat(); b = Color.blue(c).toFloat()
+                }
                 // A little milky and a little more saturated than what is behind.
                 val luma = r * 0.3f + g * 0.59f + b * 0.11f
-                r = luma + (r - luma) * 1.2f; g = luma + (g - luma) * 1.2f; b = luma + (b - luma) * 1.2f
-                r = r * 0.86f + 30f; g = g * 0.86f + 30f; b = b * 0.86f + 30f
+                r = luma + (r - luma) * 1.28f; g = luma + (g - luma) * 1.28f; b = luma + (b - luma) * 1.28f
+                r = r * 0.84f + 32f; g = g * 0.84f + 32f; b = b * 0.84f + 32f
+                if (sheen > 0f) { r += (255f - r) * sheen; g += (255f - g) * sheen; b += (255f - b) * sheen }
 
-                // Specular rim: strongest where it faces the light (top left), a softer
-                // reflection on the opposite side, tinted by the colour behind it.
+                // Light from the top left: strongest on the edge facing it, a softer reflection on
+                // the opposite edge, where it bounces back through the glass.
                 val facing = -(nx * 0.45f + ny * 0.9f)
-                val light = 0.3f + 0.7f * max(facing, 0f) + 0.35f * max(-facing, 0f)
-                if (depth < rimW) {
-                    val k = (1f - depth / rimW).coerceIn(0f, 1f) * (0.35f + 0.6f * light)
+                val lit = max(facing, 0f)
+                val back = max(-facing, 0f)
+                // Thickness: the lower rim sits in its own shadow.
+                if (depth < shade && back > 0f) {
+                    val k = (1f - depth / shade).let { it * it } * 0.2f * back
+                    r *= 1f - k; g *= 1f - k; b *= 1f - k
+                }
+                // Bevel: a soft glow just inside the lit edge.
+                if (depth < bevel) {
+                    val k = (1f - depth / bevel).let { it * it } * (0.26f * lit + 0.08f * back)
                     r += (255f - r) * k; g += (255f - g) * k; b += (255f - b) * k
                 }
-                // Soft inner glow just inside the lit edge.
-                if (depth < zone) {
-                    val k = (1f - depth / zone) * 0.16f * max(facing, 0f)
+                // Specular rim, crisp and thin.
+                if (depth < rimW) {
+                    val k = (1f - depth / rimW).coerceIn(0f, 1f) * (0.28f + 0.62f * lit + 0.34f * back)
                     r += (255f - r) * k; g += (255f - g) * k; b += (255f - b) * k
                 }
                 out[j * w + i] = Color.argb((a * 255).toInt(), clamp(r), clamp(g), clamp(b))
             }
         }
         return Bitmap.createBitmap(out, w, h, Bitmap.Config.ARGB_8888)
+    }
+
+    /**
+     * What [v] shows right now, at [scale] of its size, blurred and made a little more vivid: the
+     * frosted backdrop behind an alert or an overlay. Captured once, so it costs nothing per frame.
+     * Null if the view isn't laid out or can't be drawn in software.
+     */
+    fun frostedSnapshot(v: View, scale: Float = 0.125f, blur: Int = 3): Bitmap? {
+        if (v.width == 0 || v.height == 0) return null
+        val w = (v.width * scale).toInt().coerceAtLeast(1)
+        val h = (v.height * scale).toInt().coerceAtLeast(1)
+        return try {
+            val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val c = Canvas(b)
+            c.drawColor(Color.BLACK)
+            c.scale(scale, scale)
+            v.draw(c)
+            val px = IntArray(w * h)
+            b.getPixels(px, 0, w, 0, 0, w, h)
+            repeat(3) { boxBlur(px, w, h, blur) }
+            for (k in px.indices) {
+                val p = px[k]
+                val r = (p shr 16) and 255; val g = (p shr 8) and 255; val bl = p and 255
+                val l = r * 0.3f + g * 0.59f + bl * 0.11f
+                px[k] = Color.rgb(clamp(l + (r - l) * 1.35f), clamp(l + (g - l) * 1.35f), clamp(l + (bl - l) * 1.35f))
+            }
+            b.setPixels(px, 0, w, 0, 0, w, h)
+            b
+        } catch (e: RuntimeException) {
+            null
+        }
     }
 
     private fun clamp(v: Float) = v.toInt().coerceIn(0, 255)
@@ -166,4 +225,47 @@ object LiquidGlass {
         Canvas(b).drawRoundRect(RectF(pad + inset, pad.toFloat(), pad + w - inset, (pad + h).toFloat()), radius, radius, p)
         return b
     }
+}
+
+/**
+ * The edge of a glass tile: a hairline that catches the light, bright on the top-left corner and
+ * fainter where it reflects at the bottom right, drawn over the artwork. [strength] brightens it
+ * on focus; [light] (-1 to 1) slides the bright corner sideways as the tile tilts.
+ */
+class GlassRim(private val radius: Float, private val stroke: Float) : Drawable() {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = stroke }
+    private val rect = RectF()
+    private val shift = Matrix()
+    private var shader: android.graphics.Shader? = null
+
+    var strength = 0.5f
+        set(v) { if (field != v) { field = v; invalidateSelf() } }
+    var light = 0f
+        set(v) { if (field != v) { field = v; invalidateSelf() } }
+
+    override fun onBoundsChange(b: Rect) {
+        val w = b.width().toFloat()
+        val h = b.height().toFloat()
+        if (w <= 0f || h <= 0f) return
+        shader = android.graphics.LinearGradient(0f, 0f, w, h,
+            intArrayOf(Color.argb(235, 255, 255, 255), Color.argb(46, 255, 255, 255), Color.argb(14, 255, 255, 255), Color.argb(120, 255, 255, 255)),
+            floatArrayOf(0f, 0.32f, 0.68f, 1f), android.graphics.Shader.TileMode.CLAMP)
+    }
+
+    override fun draw(c: Canvas) {
+        val s = shader ?: return
+        rect.set(bounds)
+        rect.inset(stroke / 2, stroke / 2)
+        shift.setTranslate(light * bounds.width() * 0.35f, 0f)
+        s.setLocalMatrix(shift)
+        paint.shader = s
+        paint.alpha = (255 * strength.coerceIn(0f, 1f)).toInt()
+        val r = (radius - stroke / 2).coerceAtLeast(0f)
+        c.drawRoundRect(rect, r, r, paint)
+    }
+
+    override fun setAlpha(alpha: Int) {}
+    override fun setColorFilter(cf: android.graphics.ColorFilter?) {}
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
 }

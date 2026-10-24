@@ -46,9 +46,11 @@ import java.util.concurrent.Executors
 /**
  * tvOS style home: a low glass dock and a compact status row in the top-right.
  */
-class HomeActivity : Activity(), TileAdapter.Listener {
+class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
     companion object {
         const val SHELF_SECONDS = 8
+        /** Without a key press for this long, the focused tile stops drifting (the TV is just left on). */
+        private const val IDLE_MOTION_MS = 45_000L
         private const val EXTRA_GUARD = "com.luumlabs.lumen.GUARD"
         private const val EXTRA_WAKE = "com.luumlabs.lumen.WAKE"
 
@@ -67,10 +69,11 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private lateinit var scene: FrameLayout
     private lateinit var backdrop: FrameLayout
     private lateinit var bg: ImageView
-    private lateinit var tintLayer: View
-    /** Colour currently painted on [tintLayer]; animates towards the focused app's colour. */
-    private var tintColor = 0
-    private var tintAnim: android.animation.ValueAnimator? = null
+    /** The focused app's colours washed over the wallpaper ([Prefs.appTint]). */
+    private lateinit var ambient: Ambient
+    /** Colours waiting for focus to settle before the wash follows them. */
+    private var pendingColours: IntArray? = null
+    private val ambientShow = Runnable { pendingColours?.let { showAmbient(it) } }
     private lateinit var header: FrameLayout
     private lateinit var clockText: TextView
     /** The large clock top left, with the date above it ([Prefs.CLOCK_LARGE]). */
@@ -91,6 +94,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
     private val sheets = ArrayList<Sheet>()
+    private var folderView: FolderView? = null
 
     private val cols = 5
     private var tileW = 0
@@ -121,6 +125,11 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private var dockShown: Drawable? = null
     /** What [dock] currently shows; set through [setDockImage] so layout passes are respected. */
     private var dockImageKey: Any? = null
+    /** The home picture the dock's glass is baked from; with the colour wash over it, if any. */
+    @Volatile private var homeBase: Bitmap? = null
+    /** Counts dock bakes, so a slow one finishing after a newer one is dropped. */
+    @Volatile private var dockGen = 0
+    private val rebake = Runnable { bakeHomeDock() }
 
     /** Top Shelf: content of the focused dock app filling the screen above the dock. */
     private lateinit var shelf: FrameLayout
@@ -243,6 +252,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         if (intro != null) return
         if (!preview) prefs.introBoot = Intro.bootStamp(this)
         sheets.toList().forEach { it.dismiss() }
+        folderView?.close()
         control.close()
         intro = Intro(this, root, scene, prefs.introSound) {
             intro = null
@@ -256,6 +266,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         control.destroy()
         intro?.finish()
         runCatching { unregisterReceiver(screenOn) }
+        adapter.release()
         io.shutdown()
         net.shutdown()
         super.onDestroy()
@@ -274,8 +285,8 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         backdrop.addView(bg, match())
         // A slow colour wash that follows the focused app, so the background belongs to the grid
         // instead of being a slideshow of unrelated photos.
-        tintLayer = View(this)
-        backdrop.addView(tintLayer, match())
+        ambient = Ambient(this)
+        backdrop.addView(ambient, match())
 
         val dm = resources.displayMetrics
         sw = dm.widthPixels
@@ -389,7 +400,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 val row = getPosition(child) / cols
                 val wantedOffset = if (row == 0) 0 else firstRowY + row * rowPitch - expandedRowY
                 val dy = wantedOffset - scrollY
-                if (dy != 0) parent.smoothScrollBy(0, dy, Motion.ease, 360)
+                if (dy != 0) parent.smoothScrollBy(0, dy, Motion.emphasized, 460)
                 return true
             }
         }
@@ -419,7 +430,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 dock.alpha = 1f
                 frost.alpha = expansion
                 if (off > 0f) { setDockImage(scrollGlass, scrollGlass); scrollGlass.invalidateSelf() }
-                else setDockImage(dockShown, dockShown)
+                else { setDockImage(dockShown, dockShown); if (dockStale) scheduleDockBake(0) }
                 // The large clock gives way to the rows coming up under it.
                 if (!shelfShown) bigClock.alpha = 1f - expansion
             }
@@ -453,13 +464,19 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         shownBackground = key
         io.execute {
             val bmp = photo?.let { Wallpapers(this, Wallpapers.sourceFor(theme)).forHome(it) } ?: Backgrounds.render(if (Wallpapers.isPhoto(theme)) "green" else theme)
-            val glass = LiquidGlass.bake(bmp, sw, sh, dockRect, dockRadius).also { it.prepareToDraw() }
+            homeBase = bmp
+            val gen = ++dockGen
+            val glass = LiquidGlass.bake(bmp, sw, sh, dockRect, dockRadius, ambientOverlay()).also { it.prepareToDraw() }
             val blurred = Wallpapers.blurred(bmp, darken = 0.22f)
-            homeDock = glass
             main.post {
+                // A bake started since (the colour wash moved on) supersedes this glass.
+                if (gen == dockGen) {
+                    homeDock = glass
+                    dockStale = false
+                    if (!shelfShown) setDock(glass, 1200)
+                }
                 frost.setImageBitmap(blurred)
                 scrollGlass.texture(blurred)
-                if (!shelfShown) setDock(glass, 1200)
                 val old = bgPhoto
                 val next = android.graphics.drawable.BitmapDrawable(resources, bmp)
                 if (old == null) {
@@ -505,6 +522,54 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         }
         dockShown = next
         if (scrollY > 0) setDockImage(scrollGlass, scrollGlass)
+    }
+
+    /** The colour wash as the dock's glass should see it, or null when there is none. Any thread. */
+    private fun ambientOverlay(): Drawable? =
+        if (!prefs.appTint) null else ambient.current?.let { BitmapDrawable(resources, it) }
+
+    /** The wash moved on while the dock was out of sight (the grid scrolled up); bake when it returns. */
+    private var dockStale = false
+
+    private fun scheduleDockBake(delay: Long) {
+        main.removeCallbacks(rebake)
+        if (scrollY > 0) { dockStale = true; return }
+        main.postDelayed(rebake, delay)
+    }
+
+    /** Bakes the dock's glass again over the wallpaper and the colour wash now behind it. */
+    private fun bakeHomeDock() {
+        val base = homeBase ?: return
+        val overlay = ambientOverlay()
+        val gen = ++dockGen
+        dockStale = false
+        io.execute {
+            if (gen != dockGen) return@execute
+            val glass = LiquidGlass.bake(base, sw, sh, dockRect, dockRadius, overlay).also { it.prepareToDraw() }
+            main.post {
+                if (gen != dockGen || isDestroyed) return@post
+                homeDock = glass
+                if (!shelfShown) setDock(glass, 500)
+                control.refreshGlass()
+            }
+        }
+    }
+
+    /** Washes the background in [colours] and bakes the dock's glass over them once they settle. */
+    private fun showAmbient(colours: IntArray) {
+        if (!prefs.appTint) return
+        if (ambient.show(colours)) scheduleDockBake(700)
+    }
+
+    /** Picks up a change of [Prefs.appTint] made in settings. */
+    private fun applyTint() {
+        val on = prefs.appTint
+        if (!on && ambient.current != null) {
+            ambient.clear()
+            scheduleDockBake(0)
+        }
+        ambient.visibility = if (on) View.VISIBLE else View.GONE
+        if (on) adapter.apps.getOrNull(focusedPos)?.pkg?.let { repo.paletteFor(it) }?.let { showAmbient(it) }
     }
 
     // ------------------------------------------------------------------- shelf
@@ -569,19 +634,32 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         shelfPics.addView(pic, FrameLayout.LayoutParams(-1, -1))
         shelfFront = pic
         pic.alpha = 0f
-        pic.scaleX = 1.04f; pic.scaleY = 1.04f
-        pic.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(if (old == null) 0 else 700).setInterpolator(Motion.ease)
+        pic.scaleX = 1.06f; pic.scaleY = 1.06f
+        val kenBurns = !Device.isLowEnd(this)
+        pic.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(if (old == null) 0 else 800).setInterpolator(Motion.emphasized)
             .withEndAction {
                 if (old != null) shelfPics.removeView(old)
                 if (old != null) control.refreshGlass()
+                // A slow push in while the picture is up, as the Top Shelf's motion artwork does.
+                if (kenBurns && shelfFront == pic) pic.animate().scaleX(1.05f).scaleY(1.05f)
+                    .setDuration(SHELF_SECONDS * 1000L).setInterpolator(android.view.animation.LinearInterpolator()).start()
             }.start()
-        shelfInfo.animate().cancel()
-        shelfInfo.alpha = 0f
-        shelfInfo.translationY = dp(10).toFloat()
         shelfTitle.text = item.title
         shelfMeta.text = item.meta
-        shelfInfo.animate().alpha(1f).translationY(0f).setDuration(450).setStartDelay(150).start()
-        for (k in 0 until shelfDots.childCount) shelfDots.getChildAt(k).alpha = if (k == i) 1f else 0.35f
+        // Source, title and details rise in one after another.
+        listOf(shelfSource, shelfTitle, shelfMeta).forEachIndexed { k, v ->
+            v.animate().cancel()
+            v.alpha = 0f
+            v.translationY = dp(14).toFloat()
+            v.animate().alpha(1f).translationY(0f).setDuration(560).setStartDelay(160L + k * 70L)
+                .setInterpolator(Motion.emphasized).start()
+        }
+        for (k in 0 until shelfDots.childCount) {
+            val dot = shelfDots.getChildAt(k)
+            val on = k == i
+            dot.animate().alpha(if (on) 1f else 0.35f).scaleX(if (on) 1.25f else 1f).scaleY(if (on) 1.25f else 1f)
+                .setDuration(300).setInterpolator(Motion.ease).start()
+        }
         // The dock refracts the new picture.
         val pkg = shelfPkg
         io.execute {
@@ -637,7 +715,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private fun updateClock() {
         val now = Date()
         clockText.text = SimpleDateFormat(if (prefs.clock24) "HH:mm" else "h:mm a", Locale.US).format(now)
-        bigDate.text = SimpleDateFormat("EEEE, MMM d", Locale.CHINA).format(now)
+        bigDate.text = SimpleDateFormat("EEEE, MMMM d", Locale.US).format(now)
         // The large clock leaves out AM/PM, as tvOS did; at that size it reads as the time of day.
         bigTime.text = SimpleDateFormat(if (prefs.clock24) "HH:mm" else "h:mm", Locale.US).format(now)
     }
@@ -692,7 +770,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 grid.post {
                     // On first show the header buttons grab default focus; the grid should have it.
                     val headerOk = header.hasFocus() && !firstFocus
-                    if ((forceFocus || (!grid.hasFocus() && !headerOk)) && sheets.isEmpty() && !control.isOpen) focusAt(idx)
+                    if ((forceFocus || (!grid.hasFocus() && !headerOk)) && sheets.isEmpty() && !control.isOpen && folderView == null) focusAt(idx)
                     firstFocus = false
                     // A new list can leave the grid between rows; put the focused row back where it belongs.
                     grid.post { grid.focusedChild?.let { grid.layoutManager?.requestChildRectangleOnScreen(grid, it, Rect(), false, true) } }
@@ -724,7 +802,12 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     override fun onTileFocused(pos: Int, cell: TileCell) {
         focusedPos = pos
         val pkg = adapter.apps.getOrNull(pos)?.pkg
-        pkg?.let { repo.tintFor(it)?.let(::animateTint) }
+        // Wait a moment for focus to settle, so sliding along a row doesn't strobe the colours.
+        pkg?.let { repo.paletteFor(it) }?.let { colours ->
+            pendingColours = colours
+            main.removeCallbacks(ambientShow)
+            main.postDelayed(ambientShow, if (ambient.current == null) 0 else 140)
+        }
         main.removeCallbacks(shelfShow)
         if (pos < cols && pkg != null && Shelf.has(pkg) && moving < 0) {
             if (pkg != shelfPkg || !shelfShown) {
@@ -734,32 +817,6 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 main.postDelayed(shelfShow, 300)
             }
         } else hideShelf()
-    }
-
-    /** Fades the background wash from its current colour to the focused app's colour. */
-    private fun animateTint(to: Int) {
-        if (tintColor == to) return
-        val from = tintColor
-        tintColor = to
-        tintAnim?.cancel()
-        tintAnim = android.animation.ValueAnimator.ofArgb(from, to).apply {
-            duration = 420
-            interpolator = android.view.animation.DecelerateInterpolator()
-            addUpdateListener { tintLayer.background = tintWash(it.animatedValue as Int) }
-            start()
-        }
-    }
-
-    /** A diagonal wash from the app's colour into near-black, so text and glass stay readable. */
-    private fun tintWash(color: Int): android.graphics.drawable.Drawable {
-        fun part(c: Int, f: Float) = (c * f).toInt().coerceIn(0, 255)
-        val r = Color.red(color); val g = Color.green(color); val b = Color.blue(color)
-        return android.graphics.drawable.GradientDrawable(
-            android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
-            intArrayOf(
-                Color.argb(205, part(r, 0.75f), part(g, 0.75f), part(b, 0.75f)),
-                Color.argb(228, part(r, 0.34f), part(g, 0.34f), part(b, 0.34f)),
-                Color.argb(246, 8, 9, 12)))
     }
 
     override fun onTileClicked(pos: Int, cell: TileCell) {
@@ -849,59 +906,95 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private fun chooseFolder(app: AppEntry) {
         val store = Folders(this)
         val folders = store.read()
-        android.app.AlertDialog.Builder(this).setTitle("Move into folder")
-            .setItems((listOf("New folder…") + folders.map { it.name }).toTypedArray()) { _, index ->
-                if (index == 0) folderName("New folder") { name ->
+        val sheet = Sheet(root).title("Move into folder").message(null)
+            .button("New folder…") {
+                folderName("New folder") { name ->
                     val folder = store.create(name, app.pkg)
                     val order = adapter.apps.map { if (it.pkg == app.pkg) folder.id else it.pkg }
                     prefs.order = (order + prefs.order).distinct()
                     foldersChanged()
-                } else { store.move(app.pkg, folders[index - 1].id); foldersChanged() }
-            }.setNegativeButton("Cancel", null).show()
+                }
+            }
+        for (f in folders) sheet.button(f.name) { store.move(app.pkg, f.id); foldersChanged() }
+        showSheet(sheet.button("Cancel") {})
+    }
+
+    // ----------------------------------------------------------------- folders
+
+    private fun folderGeometry(): FolderView.Geometry {
+        val side = (sw * 0.0583f).toInt()
+        val gap = (sw * 0.0292f).toInt()
+        return FolderView.Geometry(tileW, tileH, cols, side, gap, rowPitch)
     }
 
     private fun openFolder(folder: AppFolder) {
+        if (folderView != null) return
         val all = repo.allApps().associateBy { it.pkg }
         val apps = folder.members.filter { it !in prefs.hidden }.mapNotNull { all[it] }
-        val dialog = android.app.AlertDialog.Builder(this).setTitle(folder.name)
-            .setItems(apps.map { it.label }.toTypedArray()) { _, index ->
-                val app = apps[index]
-                try {
-                    val intent = repo.launchIntent(app) ?: return@setItems
-                    if (!HomeGuardService.isStockHome(app.pkg) || !HomeGuardService.openStockLauncher()) startActivity(intent)
-                    rememberOpened(folder.id)
-                } catch (_: Exception) { Toast.makeText(this, "Can't open ${app.label}", Toast.LENGTH_SHORT).show() }
-            }.setNeutralButton("Manage") { _, _ -> manageFolder(folder, focusedPos) }
-            .setNegativeButton("Back", null).create()
-        if (apps.isEmpty()) dialog.setMessage("This folder is empty. Long-press an app on the home screen to move it in.")
-        dialog.show()
+        setGridBlocked(true)
+        folderView = FolderView(this, root, repo, folder, apps, folderGeometry(), adapter.tvosFocus, this).show()
+    }
+
+    override fun openFromFolder(app: AppEntry, cell: TileCell) {
+        val folder = folderView?.folder ?: return
+        if (HomeGuardService.isStockHome(app.pkg) && HomeGuardService.openStockLauncher()) {
+            rememberOpened(folder.id)
+            return
+        }
+        val intent = repo.launchIntent(app) ?: return
+        try {
+            startActivity(intent, ActivityOptions.makeScaleUpAnimation(cell.card, 0, 0, cell.card.width, cell.card.height).toBundle())
+            rememberOpened(folder.id)
+        } catch (_: Exception) { Toast.makeText(this, "Can't open ${app.label}", Toast.LENGTH_SHORT).show() }
+    }
+
+    override fun folderAppLongPressed(view: FolderView, app: AppEntry) {
+        val store = Folders(this)
+        val s = Sheet(root).title(app.label).message(null)
+            .button("Move to Home Screen") {
+                store.move(app.pkg, null)
+                view.close()
+                foldersChanged()
+            }
+        if (!repo.isOwn(app.pkg)) s.button("App info") {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.pkg}"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+        showSheet(s.button("Cancel") {})
+    }
+
+    override fun folderClosed(view: FolderView) {
+        if (folderView !== view) return
+        folderView = null
+        if (sheets.isEmpty() && !control.isOpen) restoreGridFocus()
     }
 
     private fun manageFolder(folder: AppFolder, pos: Int) {
         val store = Folders(this)
-        android.app.AlertDialog.Builder(this).setTitle(folder.name)
-            .setItems(arrayOf("Rename", "Move app out", "Edit Home Screen", "Delete folder")) { _, index ->
-                when (index) {
-                    0 -> folderName(folder.name) { name ->
-                        store.save(store.read().map { if (it.id == folder.id) it.copy(name = name) else it })
-                        foldersChanged()
-                    }
-                    1 -> {
-                        val all = repo.allApps().associateBy { it.pkg }
-                        val members = store.read().find { it.id == folder.id }?.members.orEmpty()
-                        android.app.AlertDialog.Builder(this).setTitle("Move back to Home Screen")
-                            .setItems(members.map { all[it]?.label ?: it }.toTypedArray()) { _, i ->
-                                store.move(members[i], null); foldersChanged()
-                            }.setNegativeButton("Cancel", null).show()
-                    }
-                    2 -> startMove(pos)
-                    3 -> android.app.AlertDialog.Builder(this).setTitle("Delete ${folder.name}?")
-                        .setMessage("The app icons return to the home screen. Apps are not uninstalled.")
-                        .setPositiveButton("Delete") { _, _ ->
-                            store.save(store.read().filter { it.id != folder.id }); foldersChanged()
-                        }.setNegativeButton("Cancel", null).show()
+        showSheet(Sheet(root).title(folder.name).message(null)
+            // After the sheet has gone, so the folder's frosted backdrop doesn't hold it.
+            .button("Open") { main.postDelayed({ if (sheets.isEmpty()) openFolder(folder) }, 240) }
+            .button("Rename") {
+                folderName(folder.name) { name ->
+                    store.save(store.read().map { if (it.id == folder.id) it.copy(name = name) else it })
+                    foldersChanged()
                 }
-            }.setNegativeButton("Cancel", null).show()
+            }
+            .button("Move an app out") {
+                val all = repo.allApps().associateBy { it.pkg }
+                val members = store.read().find { it.id == folder.id }?.members.orEmpty()
+                val pick = Sheet(root).title("Move to Home Screen").message(if (members.isEmpty()) "This folder is empty." else null)
+                for (m in members) pick.button(all[m]?.label ?: m) { store.move(m, null); foldersChanged() }
+                showSheet(pick.button("Cancel") {}, restoreFocusTo = pos)
+            }
+            .button("Edit Home Screen") { startMove(pos) }
+            .button("Delete folder") {
+                showSheet(Sheet(root).title("Delete “${folder.name}”?")
+                    .message("The apps in it return to the Home Screen. Nothing is uninstalled.")
+                    .button("Delete") { store.save(store.read().filter { it.id != folder.id }); foldersChanged() }
+                    .button("Cancel") {}, restoreFocusTo = pos)
+            }
+            .button("Cancel") {}, restoreFocusTo = pos)
     }
 
     private fun confirmDelete(app: AppEntry, pos: Int) {
@@ -1003,12 +1096,19 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     fun showSheet(s: Sheet, restoreFocusTo: Int? = null): Sheet {
         sheets += s
         setGridBlocked(true)
+        folderView?.setBlocked(true)
         s.onDismiss {
             sheets -= s
-            if (sheets.isEmpty() && control.isOpen) control.refocus()
-            else if (sheets.isEmpty()) {
-                setGridBlocked(false)
-                focusAt(restoreFocusTo ?: focusedPos)
+            // A sheet's action may have opened another sheet or a folder; focus goes there instead.
+            if (sheets.isNotEmpty()) return@onDismiss
+            val folder = folderView
+            when {
+                folder != null && folder.isOpen -> { folder.setBlocked(false); folder.refocus() }
+                control.isOpen -> control.refocus()
+                folder == null -> {
+                    setGridBlocked(false)
+                    focusAt(restoreFocusTo ?: focusedPos)
+                }
             }
         }
         return s.show()
@@ -1022,16 +1122,18 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     }
 
     fun restoreGridFocus() {
+        folderView?.let { if (it.isOpen) { it.refocus(); return } }
         setGridBlocked(false)
         focusAt(focusedPos)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         restartIdle()
+        noteActivity()
         // Any key skips the intro to its closing zoom; nothing behind it reacts meanwhile.
         intro?.let { if (event.action == KeyEvent.ACTION_UP) it.skip(); return true }
         val code = event.keyCode
-        if (event.action == KeyEvent.ACTION_DOWN && code == KeyEvent.KEYCODE_DPAD_RIGHT &&
+        if (event.action == KeyEvent.ACTION_DOWN && code == KeyEvent.KEYCODE_DPAD_RIGHT && folderView == null &&
             sheets.isEmpty() && control.isOpen && avatar.isShown && control.atRightEdge()) {
             control.close()
             avatar.requestFocus()
@@ -1040,6 +1142,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         if (event.action == KeyEvent.ACTION_UP && (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_MENU)) {
             when {
                 sheets.isNotEmpty() -> sheets.last().dismiss()
+                folderView != null -> folderView?.close()
                 control.isOpen -> control.close()
                 moving >= 0 -> endMove()
                 header.hasFocus() -> focusAt(focusedPos)
@@ -1057,6 +1160,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         if (intent.getBooleanExtra(EXTRA_WAKE, false)) return  // onResume plays the intro
         // Home pressed while already home: close everything and go back to the top.
         sheets.toList().forEach { it.dismiss() }
+        folderView?.close()
         control.close()
         if (moving >= 0) endMove()
         // The guard brought the screen back (an app exited to the stock launcher): stay where we were.
@@ -1079,6 +1183,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         avatar.setPortrait(SettingsActivity.avatarFile(this)?.let { SettingsActivity.decodeIcon(it, 96) })
         adapter.tvosFocus = prefs.focusTvos(this)
         applyClockStyle()
+        applyTint()
         control.applyStyle()
         if (wakeIntro) { wakeIntro = false; playIntro(wake = true) }
         resumed = true
@@ -1091,6 +1196,10 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         ticker.run()
         control.refresh()
         if (shelfShown && !control.isOpen) resumeShelfRotation()
+        TileCell.idleAllowed = true
+        main.removeCallbacks(stillness)
+        main.postDelayed(stillness, IDLE_MOTION_MS)
+        main.post { (currentFocus as? TileCell)?.wake() }
     }
 
     override fun onPause() {
@@ -1101,7 +1210,29 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         main.removeCallbacks(idleFrame)
         main.removeCallbacks(ticker)
         main.removeCallbacks(shelfAdvance)
+        main.removeCallbacks(stillness)
+        // Nothing drifts behind another app.
+        TileCell.idleAllowed = false
+        (currentFocus as? TileCell)?.settle()
         super.onPause()
+    }
+
+    // ------------------------------------------------------------ idle drift
+
+    /** The focused tile stops drifting once the remote has been put down for a while. */
+    private val stillness = Runnable {
+        TileCell.idleAllowed = false
+        (currentFocus as? TileCell)?.settle()
+    }
+
+    /** A key was pressed: the focused tile may drift again, until the remote is put down. */
+    private fun noteActivity() {
+        main.removeCallbacks(stillness)
+        main.postDelayed(stillness, IDLE_MOTION_MS)
+        if (!TileCell.idleAllowed && resumed) {
+            TileCell.idleAllowed = true
+            (currentFocus as? TileCell)?.wake()
+        }
     }
 
     private fun askAdbAuthorization() {
@@ -1169,7 +1300,7 @@ class IconButton(ctx: Context, icon: Int, private val portrait: Boolean = false,
         setOnFocusChangeListener { _, f ->
             disc.setColor(if (f) Color.WHITE else Color.TRANSPARENT)
             if (!portrait) img.setColorFilter(if (f) Color.BLACK else Color.WHITE)
-            tweenScale(if (f) 1.1f else 1f, 150)
+            tweenScale(if (f) 1.16f else 1f, if (f) 420 else 240, if (f) Motion.spring else Motion.soft)
         }
     }
 

@@ -153,6 +153,11 @@ class Prefs(ctx: Context) {
     /** The Control Center uses floating glass controls rather than one plain panel. */
     fun ccGlass(ctx: Context) = when (ccStyle) { CC_GLASS -> true; CC_PANEL -> false; else -> !Device.isLowEnd(ctx) }
 
+    /** The home background takes on the focused app's colours (Ambient.kt) rather than showing the wallpaper as is. */
+    var appTint: Boolean
+        get() = sp.getBoolean("app_tint", true)
+        set(v) = sp.edit().putBoolean("app_tint", v).apply()
+
     /** [AUTO], [FOCUS_TVOS] (tilt and a gliding highlight) or [FOCUS_SIMPLE] (scale and shadow only). */
     var focusStyle: String
         get() = sp.getString("focus_style", AUTO)!!

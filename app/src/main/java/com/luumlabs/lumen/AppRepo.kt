@@ -47,19 +47,40 @@ object InputTile {
     }
 }
 
-/** Enumerates launchable apps and renders their 5:3 tvOS-style tiles. */
+/**
+ * A tile's artwork in layers, as tvOS builds its icons: [back] fills the tile; [front], when the app
+ * has no banner of its own, is its icon floating above it, which the focus parallax moves further
+ * than the background so the tile reads as having depth. [front] carries [FRONT_PAD] of transparent
+ * margin on each side for its soft shadow.
+ */
+class TileArt(val back: Bitmap, val front: Bitmap? = null) {
+    val bytes get() = back.byteCount + (front?.byteCount ?: 0)
+
+    companion object {
+        const val FRONT_ICON = 192
+        const val FRONT_PAD = 18
+    }
+}
+
+/** Enumerates launchable apps and renders their 16:9 tvOS-style tiles. */
 class AppRepo(private val ctx: Context) {
     private val pm: PackageManager = ctx.packageManager
     private val prefs = Prefs(ctx)
-    private val tiles = object : LruCache<String, Bitmap>(24 * 1024 * 1024) {
-        override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+    private val tiles = object : LruCache<String, TileArt>(24 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: TileArt) = value.bytes
     }
 
-    /** Dominant colour per package, used to tint the home background behind the focused tile. */
-    private val tint = HashMap<String, Int>()
+    /**
+     * Three colours per package (vivid, deep, muted), taken from its icon; the home background
+     * washes into them behind the focused tile. Written by the tile loaders, read on the main thread.
+     */
+    private val palettes = java.util.concurrent.ConcurrentHashMap<String, IntArray>()
 
-    /** The colour of [pkg]'s artwork, or null when it has a banner/logo and no colour was needed. */
-    fun tintFor(pkg: String): Int? = tint[pkg]
+    /** The main colour of [pkg]'s artwork, once its tile has been drawn. */
+    fun tintFor(pkg: String): Int? = palettes[pkg]?.get(0)
+
+    /** [pkg]'s three colours (vivid, deep, muted), once its tile has been drawn. */
+    fun paletteFor(pkg: String): IntArray? = palettes[pkg]
 
     fun allApps(): List<AppEntry> {
         val byPkg = LinkedHashMap<String, AppEntry>()
@@ -111,11 +132,13 @@ class AppRepo(private val ctx: Context) {
         var order = prefs.order
         if (order.isEmpty()) order = Prefs.DEFAULT_ORDER
         val rank = order.withIndex().associate { it.value to it.index }
-        val collator = Collator.getInstance(Locale.CHINA)
-        return apps.filter { it.pkg !in hidden }
-            .sortedWith(compareBy<AppEntry> { rank[it.pkg] ?: Int.MAX_VALUE }
-                .thenBy { if (isSystem(it.pkg)) 1 else 0 }
-                .thenComparator { a, b -> collator.compare(a.label, b.label) })
+        val collator = Collator.getInstance(Locale.getDefault())
+        val visible = apps.filter { it.pkg !in hidden }
+        // Asked once per app: inside the comparator it was a package-manager call per comparison.
+        val system = visible.associate { it.pkg to isSystem(it.pkg) }
+        return visible.sortedWith(compareBy<AppEntry> { rank[it.pkg] ?: Int.MAX_VALUE }
+            .thenBy { if (system[it.pkg] == true) 1 else 0 }
+            .thenComparator { a, b -> collator.compare(a.label, b.label) })
     }
 
     /** Grid key of one of Lumen's own screens besides settings. */
@@ -152,35 +175,26 @@ class AppRepo(private val ctx: Context) {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
     }
 
-    fun cachedTile(pkg: String): Bitmap? = tiles.get(tileKey(pkg))
+    fun cachedTile(pkg: String): TileArt? = tiles.get(tileKey(pkg))
 
     /** The settings tile is keyed by its custom icon's date too, so a newly uploaded one shows up. */
     private fun tileKey(pkg: String): String =
         if (pkg == ctx.packageName) pkg + "@" + (SettingsActivity.customIcon(ctx)?.lastModified() ?: 0L) else pkg
 
-    /** Builds the tile bitmap; call off the main thread. */
-    fun tile(app: AppEntry): Bitmap {
+    /** Apps by package for drawing folder tiles; one package-manager query serves every folder. */
+    @Volatile private var members: Map<String, AppEntry>? = null
+
+    /** Builds the tile artwork; call off the main thread. */
+    fun tile(app: AppEntry): TileArt {
         val key = tileKey(app.pkg)
         tiles.get(key)?.let { return it }
         val bmp = Bitmap.createBitmap(TILE_W, TILE_H, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         app.folder?.let { f ->
-            c.drawColor(Color.rgb(56, 62, 82))
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-            val members = allApps().associateBy { it.pkg }
-            f.members.filter { it !in prefs.hidden }.take(4).forEachIndexed { index, pkg ->
-                members[pkg]?.let { member ->
-                    val left = 84f + (index % 2) * 122f
-                    val top = 14f + (index / 2) * 76f
-                    c.drawBitmap(tile(member), null, RectF(left, top, left + 110f, top + 62f), paint)
-                }
-            }
-            paint.color = Color.WHITE; paint.textSize = 26f; paint.textAlign = Paint.Align.CENTER
-            c.drawText(android.text.TextUtils.ellipsize(f.name, android.text.TextPaint(paint), 360f,
-                android.text.TextUtils.TruncateAt.END).toString(), 200f, 207f, paint)
-            tiles.put(key, bmp); return bmp
+            drawFolderTile(c, f)
+            return TileArt(bmp).also { tiles.put(key, it) }
         }
-        app.input?.let { drawInputTile(c, it); tiles.put(key, bmp); return bmp }
+        app.input?.let { drawInputTile(c, it); return TileArt(bmp).also { a -> tiles.put(key, a) } }
         val own = if (app.component.className == SettingsActivity::class.java.name)
             SettingsActivity.customIcon(ctx)?.let { SettingsActivity.decodeIcon(it, TILE_W) }?.let { BitmapDrawable(ctx.resources, it) }
         else null
@@ -188,35 +202,42 @@ class AppRepo(private val ctx: Context) {
             pm.getActivityInfo(app.component, 0).loadBanner(pm)
                 ?: pm.getApplicationInfo(app.pkg, 0).loadBanner(pm)
         } catch (e: Exception) { null }
-        // Every app contributes a background colour, banner or not, so the home wash follows focus.
+        // Every app contributes background colours, banner or not, so the home wash follows focus.
         val icon = try { pm.getActivityIcon(app.component) } catch (e: Exception) { pm.defaultActivityIcon }
-        val base = dominant(icon)
-        tint[app.pkg] = base
+        val colours = palette(icon)
+        palettes[app.pkg] = colours
         // Some apps ship android:logo instead of android:banner (fit for a 16:9 tile).
         val logo = if (banner == null) try { pm.getApplicationInfo(app.pkg, 0).loadLogo(pm) } catch (e: Exception) { null } else null
-        when {
-            banner != null -> drawCenterCrop(c, banner)
-            logo != null && logo.intrinsicWidth > 0 -> drawCenterCrop(c, logo)
-            else -> drawIconTile(c, icon, base)
+        val art = when {
+            banner != null -> { drawCenterCrop(c, banner); TileArt(bmp) }
+            logo != null && logo.intrinsicWidth > 0 -> { drawCenterCrop(c, logo); TileArt(bmp) }
+            else -> { drawIconBack(c, colours[0]); TileArt(bmp, iconLayer(icon)) }
         }
-        tiles.put(key, bmp)
-        return bmp
+        tiles.put(key, art)
+        return art
     }
 
-    /** The colour that best represents [icon]: its most vibrant palette swatch. */
-    private fun dominant(icon: Drawable): Int = runCatching {
+    /**
+     * The colours that best represent [icon]: its most vivid swatch, a deep one and a muted one,
+     * each falling back on the next best so there are always three.
+     */
+    private fun palette(icon: Drawable): IntArray = runCatching {
         val src = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
         icon.setBounds(0, 0, 96, 96)
         icon.draw(Canvas(src))
-        val c = Palette.from(src).maximumColorCount(12).generate().let {
-            it.lightVibrantSwatch ?: it.vibrantSwatch ?: it.dominantSwatch
-        }?.rgb ?: Color.rgb(120, 130, 150)
+        val p = Palette.from(src).maximumColorCount(16).generate()
         src.recycle()
-        c
-    }.getOrDefault(Color.rgb(120, 130, 150))
+        val main = (p.lightVibrantSwatch ?: p.vibrantSwatch ?: p.dominantSwatch)?.rgb ?: FALLBACK
+        val deep = (p.darkVibrantSwatch ?: p.darkMutedSwatch)?.rgb ?: blend(main, Color.BLACK, 0.55f)
+        val muted = (p.mutedSwatch ?: p.vibrantSwatch ?: p.lightMutedSwatch)?.rgb ?: blend(main, deep, 0.5f)
+        intArrayOf(main, deep, muted)
+    }.getOrDefault(intArrayOf(FALLBACK, blend(FALLBACK, Color.BLACK, 0.55f), FALLBACK))
 
     /** Drops the cached tile of [pkg] (it was updated or removed), or of every app. */
-    fun invalidate(pkg: String? = null) { if (pkg == null) tiles.evictAll() else tiles.remove(tileKey(pkg)) }
+    fun invalidate(pkg: String? = null) {
+        members = null
+        if (pkg == null) tiles.evictAll() else tiles.remove(tileKey(pkg))
+    }
 
     private fun drawCenterCrop(c: Canvas, d: Drawable) {
         val iw = d.intrinsicWidth.takeIf { it > 0 } ?: TILE_W
@@ -232,16 +253,12 @@ class AppRepo(private val ctx: Context) {
     }
 
     /**
-     * Icon-only apps: the icon blown up and blurred fills the tile, with the
-     * crisp icon in the middle — how tvOS 26 frames non-TV apps.
+     * The background of an icon-only app's tile, how tvOS 26 frames non-TV apps in Liquid Glass:
+     * a diagonal gradient of the app's own colour, light at the top left, the raw colour through
+     * the middle, deep at the bottom right, with light pooled in the corner where glass catches it.
      */
-    private fun drawIconTile(c: Canvas, icon: Drawable, base: Int) {
-        val src = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888)
-        icon.setBounds(0, 0, 192, 192)
-        icon.draw(Canvas(src))
+    private fun drawIconBack(c: Canvas, base: Int) {
         val p = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-        // Liquid Glass: a diagonal gradient of the app's own colour instead of a blurred crop.
-        // Light at the top-left, the raw dominant colour through the middle, deep at the bottom-right.
         val light = blend(base, Color.WHITE, 0.42f)
         val deep = blend(base, Color.BLACK, 0.62f)
         p.shader = android.graphics.LinearGradient(
@@ -249,21 +266,82 @@ class AppRepo(private val ctx: Context) {
             intArrayOf(light, base, deep), floatArrayOf(0f, 0.48f, 1f),
             android.graphics.Shader.TileMode.CLAMP)
         c.drawRect(0f, 0f, TILE_W.toFloat(), TILE_H.toFloat(), p)
-        p.shader = null
-        // Specular highlight in the top-left corner, like light catching the glass edge.
         p.shader = android.graphics.RadialGradient(
             TILE_W * 0.24f, TILE_H * 0.12f, TILE_W * 0.62f,
             intArrayOf(Color.argb(96, 255, 255, 255), Color.argb(24, 255, 255, 255), Color.TRANSPARENT),
             floatArrayOf(0f, 0.55f, 1f), android.graphics.Shader.TileMode.CLAMP)
         c.drawRect(0f, 0f, TILE_W.toFloat(), TILE_H.toFloat(), p)
+        // A light veil like frosted glass, and a soft pool of shade where the icon will float.
+        p.shader = android.graphics.RadialGradient(TILE_W / 2f, TILE_H * 0.56f, TILE_H * 0.5f,
+            intArrayOf(Color.argb(46, 0, 0, 0), Color.TRANSPARENT), null, android.graphics.Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, TILE_W.toFloat(), TILE_H.toFloat(), p)
+        c.drawColor(Color.argb(14, 255, 255, 255))
+    }
+
+    /** The icon as a layer of its own, with a soft shadow under it, to float above [drawIconBack]. */
+    private fun iconLayer(icon: Drawable): Bitmap {
+        val s = TileArt.FRONT_ICON
+        val pad = TileArt.FRONT_PAD
+        val out = Bitmap.createBitmap(s + pad * 2, s + pad * 2, Bitmap.Config.ARGB_8888)
+        val c = Canvas(out)
+        val glyph = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888)
+        icon.setBounds(0, 0, s, s)
+        icon.draw(Canvas(glyph))
+        // Software canvas: BlurMaskFilter works here.
+        val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            maskFilter = android.graphics.BlurMaskFilter(pad * 0.7f, android.graphics.BlurMaskFilter.Blur.NORMAL)
+            color = Color.argb(110, 0, 0, 0)
+        }
+        val alpha = glyph.extractAlpha()
+        c.drawBitmap(alpha, pad.toFloat(), pad + pad * 0.35f, shadow)
+        alpha.recycle()
+        c.drawBitmap(glyph, pad.toFloat(), pad.toFloat(), Paint(Paint.FILTER_BITMAP_FLAG))
+        glyph.recycle()
+        return out
+    }
+
+    /**
+     * A folder: a pane of tinted glass holding the first six of its apps as small tiles, three by
+     * two, with its name beneath them; translucent, so the wallpaper shows through.
+     */
+    private fun drawFolderTile(c: Canvas, f: AppFolder) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        p.shader = android.graphics.LinearGradient(0f, 0f, TILE_W.toFloat(), TILE_H.toFloat(),
+            Color.argb(120, 92, 100, 128), Color.argb(150, 28, 30, 44), android.graphics.Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, TILE_W.toFloat(), TILE_H.toFloat(), p)
         p.shader = null
-        // A light veil like frosted glass.
-        c.drawColor(Color.argb(18, 255, 255, 255))
-        val s = (TILE_H * 0.58f).toInt()
-        val dst = RectF(((TILE_W - s) / 2).toFloat(), ((TILE_H - s) / 2).toFloat(),
-            ((TILE_W + s) / 2).toFloat(), ((TILE_H + s) / 2).toFloat())
-        c.drawBitmap(src, Rect(0, 0, 192, 192), dst, p)
-        src.recycle()
+        val all = members ?: allApps().associateBy { it.pkg }.also { members = it }
+        val gap = 10f
+        val w = 104f
+        val h = w * 9f / 16f
+        val left0 = (TILE_W - (w * 3 + gap * 2)) / 2f
+        val top0 = 26f
+        val r = 9f
+        f.members.filter { it !in prefs.hidden }.mapNotNull { all[it] }.take(6).forEachIndexed { index, member ->
+            val left = left0 + (index % 3) * (w + gap)
+            val top = top0 + (index / 3) * (h + gap)
+            val dst = RectF(left, top, left + w, top + h)
+            val art = tile(member)
+            val save = c.save()
+            val clip = android.graphics.Path().apply { addRoundRect(dst, r, r, android.graphics.Path.Direction.CW) }
+            c.clipPath(clip)
+            c.drawBitmap(art.back, null, dst, p)
+            art.front?.let { fr ->
+                val inset = h * 0.18f
+                val sz = h - inset * 2
+                val scale = sz / TileArt.FRONT_ICON
+                val pad = TileArt.FRONT_PAD * scale
+                val cx = dst.centerX(); val cy = dst.centerY()
+                c.drawBitmap(fr, null, RectF(cx - sz / 2 - pad, cy - sz / 2 - pad, cx + sz / 2 + pad, cy + sz / 2 + pad), p)
+            }
+            c.restoreToCount(save)
+        }
+        p.color = Color.WHITE
+        p.textSize = 24f
+        p.textAlign = Paint.Align.CENTER
+        p.typeface = Fonts.inter(ctx, 600)
+        c.drawText(android.text.TextUtils.ellipsize(f.name, android.text.TextPaint(p), 360f,
+            android.text.TextUtils.TruncateAt.END).toString(), TILE_W / 2f, 197f, p)
     }
 
     /** Mixes [color] towards [towards] by [amount] (0 = colour, 1 = target). */
@@ -308,6 +386,7 @@ class AppRepo(private val ctx: Context) {
         )
         const val TILE_W = 400
         const val TILE_H = 225
+        private val FALLBACK = Color.rgb(120, 130, 150)
         val HIDE_ALWAYS = setOf(
             "com.oversea.aslauncher",
             "com.dangbei.TVHomeLauncher",

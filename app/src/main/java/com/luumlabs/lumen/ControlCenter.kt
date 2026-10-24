@@ -182,6 +182,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
 
     var isOpen = false
         private set
+    private val panelTween = Tween()
 
     init {
         // tvOS layout: a square power tile beside two capsules, then a row of round buttons.
@@ -301,10 +302,11 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
             val w = b.width().toFloat()
             val h = b.height().toFloat()
             if (w <= 0f || h <= 0f) return
-            // A sheen across the upper half, as light falling on a curved top surface.
+            // A sheen across the upper half, as light falling on a curved top surface, and the lower
+            // edge settling into shade, which gives the glass its thickness; one pass for both.
             sheen = android.graphics.LinearGradient(0f, 0f, 0f, h,
-                intArrayOf(Color.argb(70, 255, 255, 255), Color.argb(0, 255, 255, 255)),
-                floatArrayOf(0f, 0.55f), Shader.TileMode.CLAMP)
+                intArrayOf(Color.argb(70, 255, 255, 255), Color.argb(0, 255, 255, 255), Color.argb(0, 0, 0, 0), Color.argb(44, 0, 0, 0)),
+                floatArrayOf(0f, 0.55f, 0.72f, 1f), Shader.TileMode.CLAMP)
             // Rim: bright where it faces the light (top left), a softer reflection bottom right.
             rim = android.graphics.LinearGradient(0f, 0f, w, h,
                 intArrayOf(Color.WHITE, Color.argb(40, 255, 255, 255), Color.argb(40, 255, 255, 255), Color.argb(170, 255, 255, 255)),
@@ -607,6 +609,8 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
             set(null)
         }
 
+        val restAlpha get() = if (ready) 1f else 0.45f
+
         fun set(level: Level?) {
             // An asynchronous read started before a key press must not overwrite its newer target.
             if (ready && (sending || android.os.SystemClock.uptimeMillis() - lastInteraction < 600)) return
@@ -718,18 +722,36 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         if (glassStyle && (blurDirty || blur == null)) sampleBehind()
         panel.visibility = View.VISIBLE
         panel.alpha = 0f
-        panel.translationX = ctx.dp(24).toFloat()
-        panel.scaleX = 0.97f
-        panel.scaleY = 0.97f
+        panel.translationX = ctx.dp(20).toFloat()
+        panel.scaleX = 0.94f
+        panel.scaleY = 0.94f
         panel.pivotX = panel.width - panel.paddingRight.toFloat()
         panel.pivotY = panel.paddingTop.toFloat()
-        scrim.animate().alpha(1f).setDuration(220).start()
-        panel.animate().alpha(1f).translationX(0f).scaleX(1f).scaleY(1f).setDuration(320)
-            .setInterpolator(Motion.ease).setUpdateListener { if (glassStyle) invalidateSurfaces() }.start()
+        scrim.animate().alpha(1f).setDuration(180).start()
+        // The panel springs out of the corner; its rows follow a few frames apart, as on tvOS 27.
+        panel.animate().alpha(1f).setDuration(140).setInterpolator(Motion.ease).setUpdateListener(null).start()
+        val from = panel.translationX
+        panelTween.start(460, Motion.spring) { f ->
+            panel.translationX = lerp(from, 0f, f)
+            panel.scaleX = lerp(0.94f, 1f, f); panel.scaleY = panel.scaleX
+            if (glassStyle) invalidateSurfaces()
+        }
+        for (k in 0 until panel.childCount) {
+            val row = panel.getChildAt(k)
+            row.animate().cancel()
+            row.alpha = 0f
+            row.translationX = ctx.dp(16).toFloat()
+            row.animate().alpha(restAlpha(row)).translationX(0f).setStartDelay(30L + k * 24L).setDuration(320)
+                .setInterpolator(Motion.emphasized)
+                .setUpdateListener { if (glassStyle) invalidateSurfaces() }.start()
+        }
         memButton.requestFocus()
         host.removeCallbacks(ticker)
         host.post(ticker)
     }
+
+    /** A row's alpha at rest: a slider without a reading is dimmed. */
+    private fun restAlpha(row: View) = (row as? Slider)?.restAlpha ?: 1f
 
     fun atRightEdge(): Boolean {
         val current = panel.findFocus() ?: return false
@@ -750,8 +772,12 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         host.removeCallbacks(ticker)
         brightness.finishAnimation()
         volume.finishAnimation()
-        scrim.animate().alpha(0f).setDuration(180).start()
-        panel.animate().alpha(0f).translationX(ctx.dp(24).toFloat()).scaleX(0.97f).scaleY(0.97f).setDuration(200)
+        scrim.animate().alpha(0f).setDuration(160).start()
+        panelTween.cancel()
+        for (k in 0 until panel.childCount) panel.getChildAt(k).animate().cancel()
+        for (k in 0 until panel.childCount) panel.getChildAt(k).apply { alpha = restAlpha(this); translationX = 0f }
+        panel.animate().alpha(0f).translationX(ctx.dp(20).toFloat()).scaleX(0.96f).scaleY(0.96f).setDuration(170)
+            .setInterpolator(Motion.exit)
             .setUpdateListener { if (glassStyle) invalidateSurfaces() }
             .withEndAction {
                 host.removeView(scrim)
@@ -769,6 +795,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         panel.animate().cancel()
         scrim.animate().cancel()
         glowTween.cancel()
+        panelTween.cancel()
         blur = null
         blurShader = null
         io.shutdown()
@@ -857,7 +884,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
     }
 
     private fun confirm(title: String, msg: String, action: () -> Unit) = needAdb {
-        home.showSheet(Sheet(host).title("$title？").message(msg)
+        home.showSheet(Sheet(host).title("$title?").message(msg)
             .button(title) { action() }
             .button("Cancel") {})
     }
