@@ -234,7 +234,15 @@ class TileAdapter(
             if (!same) cell.image.setImageDrawable(null)
             loader.execute {
                 val bmp = repo.tile(app)
-                cell.post { if (cell.tag == app.pkg) cell.image.setImageBitmap(bmp) }
+                cell.post {
+                    if (cell.tag == app.pkg) {
+                        cell.image.setImageBitmap(bmp)
+                        // The tile is what computes the app's colour, so tell the host again: the
+                        // focus event that made it visible arrived before the colour existed.
+                        val p = h.bindingAdapterPosition
+                        if (cell.isFocused && p >= 0) listener.onTileFocused(p, cell)
+                    }
+                }
             }
         }
     }

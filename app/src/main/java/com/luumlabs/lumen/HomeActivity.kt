@@ -67,6 +67,10 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private lateinit var scene: FrameLayout
     private lateinit var backdrop: FrameLayout
     private lateinit var bg: ImageView
+    private lateinit var tintLayer: View
+    /** Colour currently painted on [tintLayer]; animates towards the focused app's colour. */
+    private var tintColor = 0
+    private var tintAnim: android.animation.ValueAnimator? = null
     private lateinit var header: FrameLayout
     private lateinit var clockText: TextView
     /** The large clock top left, with the date above it ([Prefs.CLOCK_LARGE]). */
@@ -266,6 +270,10 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         scene.addView(backdrop, match())
         bg = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
         backdrop.addView(bg, match())
+        // A slow colour wash that follows the focused app, so the background belongs to the grid
+        // instead of being a slideshow of unrelated photos.
+        tintLayer = View(this)
+        backdrop.addView(tintLayer, match())
 
         val dm = resources.displayMetrics
         sw = dm.widthPixels
@@ -699,6 +707,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     override fun onTileFocused(pos: Int, cell: TileCell) {
         focusedPos = pos
         val pkg = adapter.apps.getOrNull(pos)?.pkg
+        pkg?.let { repo.tintFor(it)?.let(::animateTint) }
         main.removeCallbacks(shelfShow)
         if (pos < cols && pkg != null && Shelf.has(pkg) && moving < 0) {
             if (pkg != shelfPkg || !shelfShown) {
@@ -708,6 +717,32 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 main.postDelayed(shelfShow, 300)
             }
         } else hideShelf()
+    }
+
+    /** Fades the background wash from its current colour to the focused app's colour. */
+    private fun animateTint(to: Int) {
+        if (tintColor == to) return
+        val from = tintColor
+        tintColor = to
+        tintAnim?.cancel()
+        tintAnim = android.animation.ValueAnimator.ofArgb(from, to).apply {
+            duration = 420
+            interpolator = android.view.animation.DecelerateInterpolator()
+            addUpdateListener { tintLayer.background = tintWash(it.animatedValue as Int) }
+            start()
+        }
+    }
+
+    /** A diagonal wash from the app's colour into near-black, so text and glass stay readable. */
+    private fun tintWash(color: Int): android.graphics.drawable.Drawable {
+        fun part(c: Int, f: Float) = (c * f).toInt().coerceIn(0, 255)
+        val r = Color.red(color); val g = Color.green(color); val b = Color.blue(color)
+        return android.graphics.drawable.GradientDrawable(
+            android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+            intArrayOf(
+                Color.argb(205, part(r, 0.75f), part(g, 0.75f), part(b, 0.75f)),
+                Color.argb(228, part(r, 0.34f), part(g, 0.34f), part(b, 0.34f)),
+                Color.argb(246, 8, 9, 12)))
     }
 
     override fun onTileClicked(pos: Int, cell: TileCell) {

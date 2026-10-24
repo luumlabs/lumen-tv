@@ -55,6 +55,12 @@ class AppRepo(private val ctx: Context) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
 
+    /** Dominant colour per package, used to tint the home background behind the focused tile. */
+    private val tint = HashMap<String, Int>()
+
+    /** The colour of [pkg]'s artwork, or null when it has a banner/logo and no colour was needed. */
+    fun tintFor(pkg: String): Int? = tint[pkg]
+
     fun allApps(): List<AppEntry> {
         val byPkg = LinkedHashMap<String, AppEntry>()
         fun add(list: List<ResolveInfo>, leanback: Boolean) {
@@ -182,15 +188,32 @@ class AppRepo(private val ctx: Context) {
             pm.getActivityInfo(app.component, 0).loadBanner(pm)
                 ?: pm.getApplicationInfo(app.pkg, 0).loadBanner(pm)
         } catch (e: Exception) { null }
-        if (banner != null) {
-            drawCenterCrop(c, banner)
-        } else {
-            val icon = try { pm.getActivityIcon(app.component) } catch (e: Exception) { pm.defaultActivityIcon }
-            drawIconTile(c, icon)
+        // Every app contributes a background colour, banner or not, so the home wash follows focus.
+        val icon = try { pm.getActivityIcon(app.component) } catch (e: Exception) { pm.defaultActivityIcon }
+        val base = dominant(icon)
+        tint[app.pkg] = base
+        // Some apps ship android:logo instead of android:banner (fit for a 16:9 tile).
+        val logo = if (banner == null) try { pm.getApplicationInfo(app.pkg, 0).loadLogo(pm) } catch (e: Exception) { null } else null
+        when {
+            banner != null -> drawCenterCrop(c, banner)
+            logo != null && logo.intrinsicWidth > 0 -> drawCenterCrop(c, logo)
+            else -> drawIconTile(c, icon, base)
         }
         tiles.put(key, bmp)
         return bmp
     }
+
+    /** The colour that best represents [icon]: its most vibrant palette swatch. */
+    private fun dominant(icon: Drawable): Int = runCatching {
+        val src = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
+        icon.setBounds(0, 0, 96, 96)
+        icon.draw(Canvas(src))
+        val c = Palette.from(src).maximumColorCount(12).generate().let {
+            it.lightVibrantSwatch ?: it.vibrantSwatch ?: it.dominantSwatch
+        }?.rgb ?: Color.rgb(120, 130, 150)
+        src.recycle()
+        c
+    }.getOrDefault(Color.rgb(120, 130, 150))
 
     /** Drops the cached tile of [pkg] (it was updated or removed), or of every app. */
     fun invalidate(pkg: String? = null) { if (pkg == null) tiles.evictAll() else tiles.remove(tileKey(pkg)) }
@@ -212,14 +235,11 @@ class AppRepo(private val ctx: Context) {
      * Icon-only apps: the icon blown up and blurred fills the tile, with the
      * crisp icon in the middle — how tvOS 26 frames non-TV apps.
      */
-    private fun drawIconTile(c: Canvas, icon: Drawable) {
+    private fun drawIconTile(c: Canvas, icon: Drawable, base: Int) {
         val src = Bitmap.createBitmap(192, 192, Bitmap.Config.ARGB_8888)
         icon.setBounds(0, 0, 192, 192)
         icon.draw(Canvas(src))
         val p = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-        val base = Palette.from(src).maximumColorCount(12).generate().let {
-            it.lightVibrantSwatch ?: it.vibrantSwatch ?: it.dominantSwatch
-        }?.rgb ?: Color.rgb(120, 130, 150)
         // Liquid Glass: a diagonal gradient of the app's own colour instead of a blurred crop.
         // Light at the top-left, the raw dominant colour through the middle, deep at the bottom-right.
         val light = blend(base, Color.WHITE, 0.42f)
