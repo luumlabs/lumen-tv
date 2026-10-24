@@ -119,6 +119,8 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     /** The glass baked over the home picture, kept for when the shelf goes away. */
     @Volatile private var homeDock: Bitmap? = null
     private var dockShown: Drawable? = null
+    /** What [dock] currently shows; set through [setDockImage] so layout passes are respected. */
+    private var dockImageKey: Any? = null
 
     /** Top Shelf: content of the focused dock app filling the screen above the dock. */
     private lateinit var shelf: FrameLayout
@@ -416,8 +418,8 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 icons.visibility = if (off > 0f && off >= icons.bottom) View.INVISIBLE else View.VISIBLE
                 dock.alpha = 1f
                 frost.alpha = expansion
-                if (off > 0f) { dock.setImageDrawable(scrollGlass); scrollGlass.invalidateSelf() }
-                else dock.setImageDrawable(dockShown)
+                if (off > 0f) { setDockImage(scrollGlass, scrollGlass); scrollGlass.invalidateSelf() }
+                else setDockImage(dockShown, dockShown)
                 // The large clock gives way to the rows coming up under it.
                 if (!shelfShown) bigClock.alpha = 1f - expansion
             }
@@ -476,18 +478,33 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         }
     }
 
+    /**
+     * Replaces the dock's picture outside layout passes. The grid's scroll callback also runs
+     * while the grid is laying out (a layout jump reports dy = 0), and ImageView.setImageDrawable()
+     * there calls requestLayout() during layout; the framework drops that request and logs
+     * "requestLayout() improperly called … during layout: running second layout pass".
+     */
+    private fun setDockImage(d: Drawable?, key: Any?) {
+        if (dockImageKey === key) return
+        dockImageKey = key
+        if (dock.isInLayout) dock.post { if (dockImageKey === key) dock.setImageDrawable(d) }
+        else dock.setImageDrawable(d)
+    }
+
     private fun setDock(b: Bitmap, fadeMs: Int) {
         val next = BitmapDrawable(resources, b)
         val old = dockShown
         if (old == null) {
+            dockImageKey = next
             dock.setImageDrawable(next)
         } else {
             val fade = TransitionDrawable(arrayOf(old, next)).apply { isCrossFadeEnabled = true }
+            dockImageKey = fade
             dock.setImageDrawable(fade)
             fade.startTransition(fadeMs)
         }
         dockShown = next
-        if (scrollY > 0) dock.setImageDrawable(scrollGlass)
+        if (scrollY > 0) setDockImage(scrollGlass, scrollGlass)
     }
 
     // ------------------------------------------------------------------- shelf
