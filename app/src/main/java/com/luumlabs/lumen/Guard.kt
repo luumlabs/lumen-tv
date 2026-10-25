@@ -385,9 +385,17 @@ class ConfigReceiver : BroadcastReceiver() {
         if (i.hasExtra("own_icon")) prefs.ownIcon = i.getBooleanExtra("own_icon", true)
         if (i.hasExtra("intro_sound")) prefs.introSound = i.getBooleanExtra("intro_sound", true)
         if (i.hasExtra("wake_delay")) prefs.wakeDelay = i.getIntExtra("wake_delay", 5000)
+        if (i.hasExtra("app_tint")) prefs.appTint = i.getBooleanExtra("app_tint", true)
+        // Widgets: --ez weather / charts, --es weather_unit auto|c|f, --es weather_city "Madrid", --es charts_country ES
+        if (i.hasExtra("weather")) prefs.widgetWeather = i.getBooleanExtra("weather", true)
+        if (i.hasExtra("charts")) prefs.widgetCharts = i.getBooleanExtra("charts", true)
+        i.getStringExtra("weather_unit")?.takeIf { it in setOf(Prefs.AUTO, "c", "f") }?.let { prefs.weatherUnit = it }
+        i.getStringExtra("weather_city")?.let { prefs.weatherCity = it }
+        i.getStringExtra("charts_country")?.takeIf { it.isEmpty() || it.length == 2 }?.let { prefs.chartsCountry = it }
         Guard.ensure(c)
         resultData = "guard=${prefs.guard} keep_adb=${prefs.keepAdb} secure_settings=${Guard.hasSecureSettings(c)} " +
             "background=${prefs.background} cc_style=${prefs.ccStyle} focus_style=${prefs.focusStyle} clock_style=${prefs.clockStyle} clock_24=${prefs.clock24} " +
-            "intro=${prefs.intro} intro_source=${prefs.introSource} wake_delay=${prefs.wakeDelay} own_icon=${prefs.ownIcon} settings_bg=${prefs.settingsBg} low_end=${Device.isLowEnd(c)}"
+            "intro=${prefs.intro} intro_source=${prefs.introSource} wake_delay=${prefs.wakeDelay} own_icon=${prefs.ownIcon} settings_bg=${prefs.settingsBg} app_tint=${prefs.appTint} weather=${prefs.widgetWeather} weather_unit=${prefs.weatherUnit} weather_city=${prefs.weatherCity} " +
+            "charts=${prefs.widgetCharts} charts_country=${prefs.chartsCountry} low_end=${Device.isLowEnd(c)}"
     }
 }

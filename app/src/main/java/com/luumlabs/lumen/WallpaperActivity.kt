@@ -65,8 +65,8 @@ class WallpaperActivity : Activity() {
                     cornerRadius = dp(12).toFloat(); setStroke(dp(3), Color.WHITE)
                 } else null
                 label.setTextColor(if (f) Color.WHITE else Color.argb(200, 255, 255, 255))
-                animate().scaleX(if (f) 1.08f else 1f).scaleY(if (f) 1.08f else 1f)
-                    .translationZ(if (f) dp(10).toFloat() else 0f).setDuration(160).setInterpolator(Motion.ease).start()
+                // A Tween, so the lift plays even where the TV's animations are turned off.
+                tweenScale(if (f) 1.1f else 1f, if (f) 460 else 260, if (f) Motion.spring else Motion.soft, z = if (f) dp(10).toFloat() else 0f)
             }
             setOnClickListener { pick(key) }
         }

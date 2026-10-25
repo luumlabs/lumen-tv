@@ -100,8 +100,8 @@ object Cleaner {
         }
         Thread.sleep(1500)
         val r = Result(before, availMb(ctx), stopped, viaAdb, failed)
-        prefs.lastClean = SimpleDateFormat("MMM d HH:mm", Locale.CHINA).format(Date()) +
-            "，${r.description()}"
+        prefs.lastClean = SimpleDateFormat("MMM d HH:mm", Locale.US).format(Date()) +
+            ", ${r.description()}"
         return r
     }
 
