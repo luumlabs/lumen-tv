@@ -6,8 +6,6 @@ on:
   push:
     branches:
       - main
-      # Temporary: applies the rewritten notes before this branch is merged.
-      - claude/trusting-archimedes-f0eyve
     paths:
       - 'docs/releases/**'
       - '.github/workflows/release-notes.yml'
