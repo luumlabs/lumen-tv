@@ -571,6 +571,7 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
 
     /** Counts widget bakes, so a slow one finishing after a newer one is dropped. */
     @Volatile private var widgetGen = 0
+    private var widgetBakeMissed = false
 
     /**
      * Bakes clear Liquid Glass for each widget over exactly what is behind it (the wallpaper and the
@@ -579,6 +580,8 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
     private fun bakeWidgets() {
         val base = homeBase ?: return
         if (!widgetsEnabled || scrollY > 0 || shelfShown) return
+        // Mid zoom-back the scene is scaled and the widgets aren't where they will rest.
+        if (zoomTween.running) { widgetBakeMissed = true; return }
         val at = IntArray(2)
         val jobs = shownWidgets().mapNotNull { w ->
             if (w.width == 0) return@mapNotNull null
@@ -944,7 +947,10 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
     private fun zoomBack(p: android.graphics.PointF) {
         scene.pivotX = p.x
         scene.pivotY = p.y
-        zoomTween.start(560, Motion.soft, end = { scene.scaleX = 1f; scene.scaleY = 1f }) { f ->
+        zoomTween.start(560, Motion.soft, end = {
+            scene.scaleX = 1f; scene.scaleY = 1f
+            if (widgetBakeMissed) { widgetBakeMissed = false; bakeWidgets() }
+        }) { f ->
             scene.scaleX = lerp(1.06f, 1f, f)
             scene.scaleY = scene.scaleX
         }
