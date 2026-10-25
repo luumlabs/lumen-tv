@@ -191,7 +191,8 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         val power = GlassButton("Power off", R.drawable.ic_power, Shape.TILE) {
             confirm("Power off", "The TV will fully power down. Turn it back on with the power button on the remote.") { Cleaner.shutdown(ctx) }
         }
-        top.addView(power, LinearLayout.LayoutParams(0, cell * 2 + gap, 1f).apply { marginEnd = gap })
+        // The capsules get the wider share: their words must fit, the power tile only has a glyph and a word.
+        top.addView(power, LinearLayout.LayoutParams(0, cell * 2 + gap, 0.8f).apply { marginEnd = gap })
         val right = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; clipChildren = false }
         networkModule = GlassButton("Network", R.drawable.ic_wifi, Shape.CAPSULE, accent = Color.rgb(48, 222, 239)) {
             close()
@@ -200,7 +201,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         right.addView(networkModule, LinearLayout.LayoutParams(-1, cell))
         right.addView(GlassButton("Standby", R.drawable.ic_moon, Shape.CAPSULE) { needAdb { close(); Cleaner.sleep(ctx) } },
             LinearLayout.LayoutParams(-1, cell).apply { topMargin = gap })
-        top.addView(right, LinearLayout.LayoutParams(0, -2, 1f))
+        top.addView(right, LinearLayout.LayoutParams(0, -2, 1.2f))
         panel.addView(top)
 
         val utilities = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false }
@@ -495,10 +496,16 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         // Capsules and circles clamp this to half their height.
         private val glass = glassFor(this, ctx.dp(if (shape == Shape.TILE) 24 else 100).toFloat())
         private val glyph = ImageView(ctx)
-        val title = ctx.text(12.5f, weight = 600).apply { text = label; maxLines = 1 }
+        val title = ctx.text(12.5f, weight = 600).apply {
+            text = label
+            isSingleLine = true
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        /** Swaps the glyph (Wi-Fi or Ethernet), keeping its colour for the focus state. */
+        fun setIcon(res: Int) = glyph.setImageResource(res)
         val sub = ctx.text(10.5f, Color.argb(205, 255, 255, 255), weight = 500).apply {
             visibility = GONE
-            maxLines = 1
+            isSingleLine = true
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
         init {
@@ -509,10 +516,11 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
             gravity = if (shape == Shape.CAPSULE) Gravity.CENTER_VERTICAL else Gravity.CENTER
             isFocusable = true
             isClickable = true
-            if (shape == Shape.CAPSULE) setPadding(ctx.dp(13), 0, ctx.dp(10), 0)
-            val size = ctx.dp(when (shape) { Shape.TILE -> 40; Shape.CAPSULE -> 20; Shape.ROUND -> 21 })
+            // Half the panel is little room: lean margins so a word like "Connected" fits whole.
+            if (shape == Shape.CAPSULE) setPadding(ctx.dp(11), 0, ctx.dp(8), 0)
+            val size = ctx.dp(when (shape) { Shape.TILE -> 40; Shape.CAPSULE -> 18; Shape.ROUND -> 21 })
             addView(glyph.apply { setImageResource(icon); setColorFilter(accent) },
-                LayoutParams(size, size).apply { if (shape == Shape.CAPSULE) marginEnd = ctx.dp(9) })
+                LayoutParams(size, size).apply { if (shape == Shape.CAPSULE) marginEnd = ctx.dp(7) })
             // Round buttons are icon-only, as on tvOS; the label stays for accessibility.
             when (shape) {
                 Shape.TILE -> addView(title, LayoutParams(-2, -2).apply { topMargin = ctx.dp(8) })
@@ -809,8 +817,14 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         val cm = ctx.getSystemService(android.net.ConnectivityManager::class.java)
         val caps = runCatching { cm.getNetworkCapabilities(cm.activeNetwork) }.getOrNull()
         val wired = caps?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) == true
-        networkModule.title.text = if (wired) "Wired network" else "Wi-Fi"
-        networkModule.sub.text = if (caps == null) "Not connected" else "Connected"
+        // Short words: the capsule is half the panel wide, and a clipped "Connected" read as "Connecting".
+        networkModule.title.text = if (wired) "Ethernet" else "Wi-Fi"
+        networkModule.sub.text = when {
+            caps == null -> "Offline"
+            !caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED) -> "Limited"
+            else -> "Connected"
+        }
+        networkModule.setIcon(if (wired) R.drawable.ic_ethernet else R.drawable.ic_wifi)
         networkModule.sub.visibility = View.VISIBLE
         if (refreshing) return
         refreshing = true

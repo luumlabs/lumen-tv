@@ -232,9 +232,15 @@ fun glassCapsule(ctx: Context, radius: Float, fill: Int = Color.argb(40, 255, 25
  * A pill button in tvOS style: clear glass when idle, solid white with
  * dark text when focused, lifted on a soft shadow.
  */
-class PillButton(ctx: Context, label: String, iconRes: Int? = null, val onClick: () -> Unit) : LinearLayout(ctx) {
+class PillButton(
+    ctx: Context, label: String, iconRes: Int? = null,
+    /** An app's own icon, shown in its colours rather than tinted like a glyph. */
+    appIcon: android.graphics.drawable.Drawable? = null,
+    val onClick: () -> Unit,
+) : LinearLayout(ctx) {
     private val tv = ctx.text(17f, weight = 600).apply { text = label; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
     private val icon: ImageView? = iconRes?.let { ImageView(ctx).apply { setImageResource(it) } }
+    private val app: ImageView? = appIcon?.let { ImageView(ctx).apply { setImageDrawable(it); clipRounded(ctx.dp(6).toFloat()) } }
     private val idle = glassCapsule(ctx, dp(26).toFloat())
     private val focus = rounded(Color.WHITE, dp(26).toFloat())
 
@@ -246,6 +252,7 @@ class PillButton(ctx: Context, label: String, iconRes: Int? = null, val onClick:
         background = idle
         setPadding(dp(28), 0, dp(28), 0)
         icon?.let { addView(it, LayoutParams(dp(22), dp(22)).apply { marginEnd = dp(10) }) }
+        app?.let { addView(it, LayoutParams(dp(28), dp(28)).apply { marginEnd = dp(12) }) }
         addView(tv)
         setOnClickListener { onClick() }
         setOnFocusChangeListener { _, f ->
@@ -348,6 +355,17 @@ class Sheet(private val host: FrameLayout) {
             }
         }
         buttons.addView(b, LinearLayout.LayoutParams(ctx.dp(440), ctx.dp(52)).apply { topMargin = ctx.dp(12) })
+    }
+
+    /** A button for opening an app, with the app's icon beside its name. */
+    fun appButton(label: String, icon: android.graphics.drawable.Drawable?, action: () -> Unit) = apply {
+        val b = PillButton(ctx, label, appIcon = icon) {
+            if (!dismissing) {
+                dismiss()
+                action()
+            }
+        }
+        buttons.addView(b, LinearLayout.LayoutParams(ctx.dp(480), ctx.dp(56)).apply { topMargin = ctx.dp(12) })
     }
 
     fun onDismiss(f: () -> Unit) = apply { onDismiss = f }

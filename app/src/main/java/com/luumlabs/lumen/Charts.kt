@@ -43,6 +43,11 @@ object Charts {
         val director: String?,
         val provider: String?,
         val providerKind: String?,
+        /** IMDb id ("tt0111161"): what Stremio and Nuvio know a title by. */
+        val imdbId: String? = null,
+        val tmdbId: String? = null,
+        /** Every service offering it, best first. */
+        val offers: List<Offer> = emptyList(),
     ) {
         /** One score from 0 to 100 that critics and audiences would broadly agree on, or null with too little to go on. */
         val criticScore: Double?
@@ -54,11 +59,18 @@ object Charts {
     }
 
     /** A chart: [label] heads the widget, [short] names its tab, [rank] follows "No. 3" in the details. */
+    /**
+     * A service offering a title: its name, JustWatch's technical name for it, how it is offered
+     * (FLATRATE, FREE, ADS, RENT, BUY) and the service's own page for the title, which TV apps
+     * usually open straight at the title.
+     */
+    data class Offer(val name: String, val technical: String, val kind: String, val url: String?)
+
     data class Chart(val key: String, val label: String, val short: String, val rank: String, val items: List<Title>)
 
     private const val TTL = 6 * 60 * 60_000L
     private const val ENDPOINT = "https://apis.justwatch.com/graphql"
-    private const val LEVELS = 5
+    private const val LEVELS = 6
     @Volatile private var memo: Pair<Long, List<Chart>>? = null
     /** When the last load failed: the next waits a while instead of trying again every minute. */
     @Volatile private var failedAt = 0L
@@ -143,21 +155,26 @@ object Charts {
     /** The GraphQL request, richest at level 0; each level leaves out what is likeliest to have moved. */
     private fun query(level: Int): String {
         val d = '$'
-        val poster = if (level < 3) "posterUrl(profile: S332, format: JPG)" else "posterUrl"
-        val backdrops = if (level < 3) "backdrops(profile: S1440, format: JPG) { backdropUrl }" else "backdrops { backdropUrl }"
+        val poster = if (level < 4) "posterUrl(profile: S332, format: JPG)" else "posterUrl"
+        val backdrops = if (level < 4) "backdrops(profile: S1440, format: JPG) { backdropUrl }" else "backdrops { backdropUrl }"
         val scoring = when (level) {
-            0, 1 -> "scoring { imdbScore imdbVotes tmdbScore jwRating tomatoMeter certifiedFresh }"
-            2, 3 -> "scoring { imdbScore imdbVotes tmdbScore }"
+            0, 1, 2 -> "scoring { imdbScore imdbVotes tmdbScore jwRating tomatoMeter certifiedFresh }"
+            3, 4 -> "scoring { imdbScore imdbVotes tmdbScore }"
             else -> ""
         }
-        val credits = if (level <= 1) "credits { role name }" else ""
-        val offers = if (level == 0) "offers(country: ${d}country, platform: WEB, filter: { bestOnly: true }) { monetizationType package { clearName technicalName } }" else ""
-        val extra = if (level < 4) "runtime ageCertification shortDescription genres { shortName }" else ""
+        val credits = if (level <= 2) "credits { role name }" else ""
+        val ids = if (level <= 3) "externalIds { imdbId tmdbId }" else ""
+        val offers = when (level) {
+            0 -> "offers(country: ${d}country, platform: WEB, filter: { bestOnly: true }) { monetizationType standardWebURL package { clearName technicalName } }"
+            1 -> "offers(country: ${d}country, platform: WEB, filter: { bestOnly: true }) { monetizationType package { clearName technicalName } }"
+            else -> ""
+        }
+        val extra = if (level < 5) "runtime ageCertification shortDescription genres { shortName }" else ""
         return """
             query LumenCharts(${d}country: Country!, ${d}language: Language!, ${d}first: Int!, ${d}filter: TitleFilter) {
               popularTitles(country: ${d}country, first: ${d}first, filter: ${d}filter, sortBy: POPULAR) {
                 edges { node { id objectType
-                  content(country: ${d}country, language: ${d}language) { title originalReleaseYear $extra $poster $backdrops $scoring $credits }
+                  content(country: ${d}country, language: ${d}language) { title originalReleaseYear $extra $poster $backdrops $scoring $credits $ids }
                   $offers
                 } }
               }
@@ -183,20 +200,10 @@ object Charts {
                     "DIRECTOR" -> if (director == null) director = cr.optString("name").takeIf { it.isNotBlank() }
                 }
             }
-            val offers = node.optJSONArray("offers")
-            var provider: String? = null
-            var kind: String? = null
-            if (offers != null) {
-                // A subscription beats free with ads beats renting or buying.
-                val rank = mapOf("FLATRATE" to 0, "FREE" to 1, "ADS" to 2, "RENT" to 3, "BUY" to 4)
-                var best = Int.MAX_VALUE
-                for (i in 0 until offers.length()) {
-                    val of = offers.optJSONObject(i) ?: continue
-                    val r = rank[of.optString("monetizationType")] ?: continue
-                    val n = of.optJSONObject("package")?.optString("clearName")?.takeIf { it.isNotBlank() } ?: continue
-                    if (r < best) { best = r; provider = n; kind = of.optString("monetizationType") }
-                }
-            }
+            val offerList = parseOffers(node.optJSONArray("offers"))
+            val provider = offerList.firstOrNull()?.name
+            val kind = offerList.firstOrNull()?.kind
+            val ext = c.optJSONObject("externalIds")
             val genres = c.optJSONArray("genres")?.let { g -> (0 until g.length()).mapNotNull { GENRES[g.optJSONObject(it)?.optString("shortName")] } }.orEmpty()
             out += Title(
                 id = node.optString("id", name),
@@ -219,9 +226,29 @@ object Charts {
                 director = director,
                 provider = provider,
                 providerKind = kind,
+                imdbId = ext?.optString("imdbId")?.takeIf { it.startsWith("tt") },
+                tmdbId = ext?.optString("tmdbId")?.takeIf { it.isNotBlank() && it != "null" && it != "0" },
+                offers = offerList,
             )
         }
         return out
+    }
+
+    /** Offers ordered best first, one per service: a subscription beats free with ads beats renting or buying. */
+    internal fun parseOffers(offers: JSONArray?): List<Offer> {
+        if (offers == null) return emptyList()
+        val rank = mapOf("FLATRATE" to 0, "FREE" to 1, "ADS" to 2, "RENT" to 3, "BUY" to 4)
+        val all = ArrayList<Pair<Int, Offer>>()
+        for (i in 0 until offers.length()) {
+            val of = offers.optJSONObject(i) ?: continue
+            val kind = of.optString("monetizationType")
+            val r = rank[kind] ?: continue
+            val pkg = of.optJSONObject("package") ?: continue
+            val name = pkg.optString("clearName").takeIf { it.isNotBlank() && it != "null" } ?: continue
+            val url = of.optString("standardWebURL").takeIf { it.startsWith("http") }
+            all += r to Offer(name, pkg.optString("technicalName"), kind, url)
+        }
+        return all.sortedBy { it.first }.map { it.second }.distinctBy { it.name }
     }
 
     /** JustWatch picture paths are relative and sometimes still carry their {profile} and {format} slots. */

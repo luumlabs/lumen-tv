@@ -48,9 +48,9 @@ La interfaz está en inglés. Lumen TV es un fork independiente de
 - **Tiempo**: temperatura, estado del cielo y las próximas seis horas; con OK, el pronóstico de seis
   días. Datos de [Open-Meteo](https://open-meteo.com).
 - **Top 10**: las películas y series más populares de la semana en tu país, y las mejor valoradas,
-  con puntuaciones de IMDb, Rotten Tomatoes, TMDB y JustWatch, el reparto y dónde verlas. Se
-  recorren a pantalla completa y abren directamente la app de streaming. Datos de
-  [JustWatch](https://www.justwatch.com).
+  con puntuaciones de IMDb, Rotten Tomatoes, TMDB y JustWatch, el reparto y dónde verlas. Pulsa
+  OK en un título para elegir dónde abrirlo: las apps de streaming instaladas que lo tienen, Nuvio o
+  Stremio, cada una directamente en ese título. Datos de [JustWatch](https://www.justwatch.com).
 
 **Centro de control** (tecla Atrás en la pantalla de inicio)
 

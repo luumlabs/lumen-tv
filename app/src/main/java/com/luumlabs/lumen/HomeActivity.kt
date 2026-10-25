@@ -1212,7 +1212,7 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
 
     // ------------------------------------------------------------ overlays / keys
 
-    fun showSheet(s: Sheet, restoreFocusTo: Int? = null): Sheet {
+    fun showSheet(s: Sheet, restoreFocusTo: Int? = null, restoreView: View? = null): Sheet {
         sheets += s
         setGridBlocked(true)
         folderView?.setBlocked(true)
@@ -1228,7 +1228,7 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
                 control.isOpen -> control.refocus()
                 folder == null -> {
                     setGridBlocked(false)
-                    focusAt(restoreFocusTo ?: focusedPos)
+                    if (restoreView?.isShown == true) restoreView.requestFocus() else focusAt(restoreFocusTo ?: focusedPos)
                 }
             }
         }
@@ -1460,13 +1460,48 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
         }.show()
     }
 
+    /** OK on the Top 10 widget: where to watch the title showing, or the full charts. */
     private fun openCharts() {
-        val list = chartsWidget.charts
-        if (list.isEmpty()) {
+        val t = chartsWidget.charts.getOrNull(chartsWidget.current)?.items?.getOrNull(chartsWidget.item)
+        if (t == null) {
             Toast.makeText(this, "This week's Top 10 is still loading", Toast.LENGTH_SHORT).show()
             refreshWidgets(force = true)
             return
         }
+        showWatchOptions(t) { openChartsView() }
+    }
+
+    /**
+     * Asks where to watch [t]: the installed apps that can open it (streaming services at the
+     * title where they take its link, Nuvio and Stremio at the title by its IMDb id), each with its
+     * icon, and [browse] (the full Top 10) when given. Only options that resolve on this TV appear.
+     */
+    fun showWatchOptions(t: Charts.Title, browse: (() -> Unit)? = null) {
+        io.execute {
+            val apps = repo.allApps()
+            val options = WatchOptions.forTitle(this, t, apps)
+            val elsewhere = WatchOptions.elsewhere(t, options, apps)
+            main.post {
+                // A second OK while the apps were being looked up must not stack another sheet.
+                if (isDestroyed || sheets.isNotEmpty()) return@post
+                val message = when {
+                    options.isEmpty() && elsewhere.isEmpty() -> "No app on this TV can open it, and it isn't streaming in your country right now."
+                    options.isEmpty() -> "It streams on ${elsewhere.take(4).joinToString(", ")}, which ${if (elsewhere.size == 1) "isn't" else "aren't"} installed on this TV."
+                    elsewhere.isNotEmpty() -> "Choose where to watch. Also on ${elsewhere.take(3).joinToString(", ")}."
+                    else -> "Choose where to watch."
+                }
+                val sheet = Sheet(root).title(t.name).message(message)
+                for (o in options) sheet.appButton(o.label, o.icon) { WatchOptions.open(this, o) }
+                browse?.let { b -> sheet.button("See the full Top 10") { b() } }
+                // From the widget, focus returns to it; over the full charts, to them.
+                showSheet(sheet.button("Cancel") {}, restoreView = chartsWidget)
+            }
+        }
+    }
+
+    private fun openChartsView() {
+        val list = chartsWidget.charts
+        if (list.isEmpty() || chartsView != null) return
         setGridBlocked(true)
         chartsWidget.stop()
         chartsView = ChartsView(this, root, list, chartsWidget.current, chartsWidget.item, chartsWidget.country, repo) {

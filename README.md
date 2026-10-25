@@ -49,8 +49,8 @@ by lesnolie. See [Credits](#credits).
   forecast. Data by [Open-Meteo](https://open-meteo.com).
 - **Top 10**: this week's most popular movies and shows in your country, and the best reviewed of
   them, with scores from IMDb, Rotten Tomatoes, TMDB and JustWatch, the cast and where to watch.
-  Browse full screen and open the streaming app directly. Data by
-  [JustWatch](https://www.justwatch.com).
+  Press OK on a title to choose where to open it: the installed streaming apps that carry it, Nuvio
+  or Stremio, each opened at the title. Data by [JustWatch](https://www.justwatch.com).
 
 **Control Center** (the Back key on the home screen)
 

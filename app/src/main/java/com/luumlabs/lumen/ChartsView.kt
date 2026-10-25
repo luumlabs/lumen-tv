@@ -558,7 +558,7 @@ class ChartsView(
         val app = t.provider?.let { p -> apps?.let { Charts.providerApp(it, p) } }
         provider.text = when {
             t.provider == null -> ""
-            app != null -> "▶  Open in ${app.label}"
+            app != null -> "▶  Watch on ${app.label}"
             t.providerKind == "RENT" || t.providerKind == "BUY" -> "Rent or buy on ${t.provider}"
             else -> "Streaming on ${t.provider}"
         }
@@ -612,18 +612,13 @@ class ChartsView(
         }
     }
 
+    /** OK: the poster presses in, then a sheet asks where to watch it. */
     private fun openCurrent() {
         val t = charts[chart].items.getOrNull(index) ?: return
-        val app = provider.tag as? AppEntry
         items.getOrNull(index)?.card?.let { card ->
-            card.animate().scaleX(1.06f).scaleY(1.06f).setDuration(90).withEndAction { card.animate().scaleX(1.14f).scaleY(1.14f).setDuration(260).setInterpolator(Motion.spring).start() }.start()
+            card.animate().scaleX(1.05f).scaleY(1.05f).setDuration(90).withEndAction { card.animate().scaleX(1.12f).scaleY(1.12f).setDuration(260).setInterpolator(Motion.lift).start() }.start()
         }
-        if (app == null) {
-            Toast.makeText(ctx, if (t.provider == null) "Not streaming in your country right now" else "${t.provider} isn't installed on this TV", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val intent = repo.launchIntent(app) ?: return
-        try { ctx.startActivity(intent) } catch (_: Exception) { Toast.makeText(ctx, "Can't open ${app.label}", Toast.LENGTH_SHORT).show() }
+        home.showWatchOptions(t)
     }
 
     /** Darkens the backdrop where the text and posters sit: left, bottom, and a little at the top. */
