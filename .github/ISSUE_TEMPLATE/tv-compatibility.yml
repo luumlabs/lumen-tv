@@ -1,68 +1,71 @@
-name: "📺 电视安装 / TV compatibility report"
-description: "反馈真实电视上的安装、启动、功能兼容性 / Report install, launch and feature compatibility on a real TV"
-title: "[TV] 品牌 型号 / Brand Model"
+name: "📺 TV compatibility report / Informe de compatibilidad"
+description: "Report how Lumen TV installs and runs on a real TV / Cuenta cómo se instala y funciona Lumen TV en un televisor real"
+title: "[TV] Brand Model"
 body:
   - type: markdown
     attributes:
       value: |
-        请填写实际测试结果，而不是根据品牌猜测。**安装成功不等于所有功能正常**。
-        Provide actual observed results; installing successfully does not prove every feature works.
-        提交后，会由自动化生成 README 更新 PR，**必须由维护者审核才会合并**。
+        Please report what you actually observed on your TV, not what you expect from the brand.
+        **A successful install does not mean every feature works.** Reports are added to the README
+        as *self-reported*, through a pull request a maintainer reviews.
+
+        Describe lo que observaste en tu televisor. **Que se instale no significa que todo funcione.**
+        Los informes se añaden al README como *no verificados*, mediante un pull request revisado.
   - type: input
     id: brand
     attributes:
-      label: "品牌 / Brand"
-      placeholder: "Sony / 小米 / TCL / 雷鸟 / 创维 / ..."
+      label: "Brand / Marca"
+      placeholder: "Sony, TCL, Xiaomi, Hisense, Philips…"
     validations:
       required: true
   - type: input
     id: model
     attributes:
-      label: "型号 / Model"
-      placeholder: "XR-55A80J, 75R685C, MiTV-ANSP0 ..."
+      label: "Model / Modelo"
+      placeholder: "XR-55A80J, 55C745, MiTV-ANSP0…"
     validations:
       required: true
   - type: input
     id: android
     attributes:
-      label: "Android 版本 / Android version"
-      description: "最好包含 API/SDK 号 / Prefer Android version and API level"
+      label: "Android version / Versión de Android"
+      description: "Include the API level if you know it / Incluye el nivel de API si lo conoces"
       placeholder: "Android 11 (API 30)"
     validations:
       required: true
   - type: input
     id: version
     attributes:
-      label: "Lumen 版本 / Lumen version"
-      placeholder: "v2.0.2"
+      label: "Lumen version / Versión de Lumen"
+      placeholder: "v3.4.0"
     validations:
       required: true
   - type: dropdown
     id: apk
     attributes:
-      label: "安装包 / APK type"
+      label: "APK type / Tipo de APK"
       options:
-        - "Standard / 标准版"
-        - "Guard / 守护版"
-        - "Custom fork / 自定义版本"
+        - "Standard / Estándar"
+        - "Guard / Guard"
+        - "Custom fork / Fork propio"
     validations:
       required: true
   - type: dropdown
     id: outcome
     attributes:
-      label: "安装结果 / Installation result"
+      label: "Installation result / Resultado de la instalación"
       options:
-        - "Installed and launches / 已安装且启动"
-        - "Installed but crashes / 安装成功但崩溃"
-        - "Installation rejected / 无法安装"
-        - "Not tested / 尚未测试"
+        - "Installed and launches / Instalado y se abre"
+        - "Installed but crashes / Instalado pero se cierra"
+        - "Installation rejected / Instalación rechazada"
+        - "Not tested / Sin probar"
     validations:
       required: true
   - type: textarea
     id: details
     attributes:
-      label: "实际现象、功能测试和日志 / Observations, feature tests and logs"
-      description: "例如 HDMI、返回键、默认桌面、亮度、音量、错误代码 / HDMI, Back key, HOME behavior, brightness, volume, error codes"
-      placeholder: "请写出实际操作和结果 / Steps and observed results"
+      label: "Observations, feature tests and logs / Observaciones, pruebas y registros"
+      description: "HDMI inputs, Back and Home keys, default home, brightness, volume, error messages / Entradas HDMI, teclas Atrás e Inicio, pantalla de inicio por defecto, brillo, volumen, errores"
+      placeholder: "What you did and what happened / Qué hiciste y qué pasó"
     validations:
       required: true

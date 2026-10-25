@@ -46,7 +46,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           data = Path("src/data/site.ts").read_text()
-          releases = "https://github.com/lesnolie/Lumen/releases"
+          releases = "https://github.com/luumlabs/lumen-tv/releases"
           assert f'apk: "{releases}"' in data
           assert f'apkGuard: "{releases}"' in data
           for retired in ("releaseTag", "releases/download/", "releases/latest"):

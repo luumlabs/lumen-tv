@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Propose bilingual README updates from structured GitHub TV compatibility issues.
+"""Propose README updates (English and Spanish) from structured GitHub TV compatibility issues.
 
 Only Issue Form fields are parsed. Free-form notes are intentionally excluded.
 Output is a *community self-report* table, NEVER a maintainer-verified verdict.
@@ -12,28 +12,31 @@ import re
 import urllib.request
 from pathlib import Path
 
-REPO = os.environ.get("GITHUB_REPOSITORY", "lesnolie/Lumen")
+REPO = os.environ.get("GITHUB_REPOSITORY", "luumlabs/lumen-tv")
 BASE = "https://api.github.com/repos/" + REPO
 START = "<!-- TV_COMPATIBILITY_AUTO_START -->"
 END = "<!-- TV_COMPATIBILITY_AUTO_END -->"
+# Issue Form headings, current first; the bilingual Chinese ones come from forms filed before the
+# form was translated, and still parse.
 KEYS = {
-    "brand": "品牌 / Brand",
-    "model": "型号 / Model",
-    "android": "Android 版本 / Android version",
-    "version": "Lumen 版本 / Lumen version",
-    "apk": "安装包 / APK type",
-    "outcome": "安装结果 / Installation result",
+    "brand": ("Brand / Marca", "品牌 / Brand"),
+    "model": ("Model / Modelo", "型号 / Model"),
+    "android": ("Android version / Versión de Android", "Android 版本 / Android version"),
+    "version": ("Lumen version / Versión de Lumen", "Lumen 版本 / Lumen version"),
+    "apk": ("APK type / Tipo de APK", "安装包 / APK type"),
+    "outcome": ("Installation result / Resultado de la instalación", "安装结果 / Installation result"),
 }
+# Each value is (Spanish, English), matching the `english` flag of build() as an index.
 OUTCOMES = {
-    "Installed and launches": ("已安装且能启动（自报）", "Installed and launched (reported)"),
-    "Installed but crashes": ("已安装但崩溃（自报）", "Installed but crashes (reported)"),
-    "Installation rejected": ("无法安装（自报）", "Install rejected (reported)"),
-    "Not tested": ("尚未测试", "Not tested"),
+    "Installed and launches": ("Instalado y se abre (informado)", "Installed and launched (reported)"),
+    "Installed but crashes": ("Instalado pero se cierra (informado)", "Installed but crashes (reported)"),
+    "Installation rejected": ("Instalación rechazada (informado)", "Install rejected (reported)"),
+    "Not tested": ("Sin probar", "Not tested"),
 }
 APKS = {
-    "Standard": ("标准版", "Standard"),
-    "Guard": ("守护版", "Guard"),
-    "Custom fork": ("自定义 Fork", "Custom fork"),
+    "Standard": ("Estándar", "Standard"),
+    "Guard": ("Guard", "Guard"),
+    "Custom fork": ("Fork propio", "Custom fork"),
 }
 
 
@@ -69,7 +72,7 @@ def form_fields(body):
     fields = {}
     for title, value in re.findall(r"(?ms)^### ([^\n]+)\n(.*?)(?=^### |\Z)", (body or "").replace("\r\n", "\n")):
         fields[title.strip()] = value.strip()
-    values = {key: fields.get(label, "") for key, label in KEYS.items()}
+    values = {key: next((fields[l] for l in labels if fields.get(l)), "") for key, labels in KEYS.items()}
     if any(not val or val in {"_No response_", "No response"} for val in values.values()):
         return None
     outcome = values["outcome"].split(" / ", 1)[0]
@@ -104,8 +107,8 @@ def build(issues, english):
         version = clean(record["version"]) + " / " + APKS[record["apk"]][locale]
         outcome = OUTCOMES[record["outcome"]][locale]
         # This is GitHub issue state, not evidence that the bug has been fixed.
-        issue_state = (("已关闭（未验证修复）", "Closed (fix unverified)") if
-                       issue.get("state") == "closed" else ("未关闭", "Open"))[locale]
+        issue_state = (("Cerrado (arreglo sin verificar)", "Closed (fix unverified)") if
+                       issue.get("state") == "closed" else ("Abierto", "Open"))[locale]
         link = f"[#{no}](https://github.com/{REPO}/issues/{no})"
         rows.append((no, f"| {device} | {platform} | {version} | {outcome} | {issue_state} | {link} |"))
     rows.sort(key=lambda item: item[0], reverse=True)
@@ -113,11 +116,11 @@ def build(issues, english):
         return ("No structured community reports yet. [Submit a report](https://github.com/"
                 + REPO + "/issues/new/choose)."
                 if english else
-                "尚无新的结构化社区反馈。[提交电视兼容性反馈](https://github.com/"
-                + REPO + "/issues/new/choose)。")
+                "Todavía no hay informes de la comunidad. [Envía un informe](https://github.com/"
+                + REPO + "/issues/new/choose).")
     header = ("| TV model | Android | Lumen / APK | Installation result | Issue state | Source |\n"
               "|---|---|---|---|---|---|" if english else
-              "| 品牌与型号 | Android | Lumen / 安装包 | 安装结果 | Issue 状态 | 来源 |\n"
+              "| Modelo de TV | Android | Lumen / APK | Resultado de la instalación | Estado | Fuente |\n"
               "|---|---|---|---|---|---|")
     return header + "\n" + "\n".join(row for _, row in rows)
 
@@ -140,5 +143,5 @@ def update(path, content):
 
 if __name__ == "__main__":
     issues = request_issues()
-    for path, lang in (("README.md", False), ("README.en.md", True)):
+    for path, lang in (("README.md", True), ("README.es.md", False)):
         update(path, build(issues, lang))

@@ -90,7 +90,7 @@ else
   guard="Lumen-guard-$tag.apk"
   checksums="SHA256SUMS-$tag.txt"
 fi
-base="https://github.com/lesnolie/Lumen/releases/download/$tag"
+base="https://github.com/luumlabs/lumen-tv/releases/download/$tag"
 if [[ "$url" == *"api.github.com"* ]]; then
   printf '{"tag_name":"%s","draft":false,"prerelease":false,"assets":[{"name":"%s","browser_download_url":"%s/%s"},{"name":"%s","browser_download_url":"%s/%s"},{"name":"%s","browser_download_url":"%s/%s"}]}' \
     "$tag" "$standard" "$base" "$standard" "$guard" "$base" "$guard" "$checksums" "$base" "$checksums" > "$out"

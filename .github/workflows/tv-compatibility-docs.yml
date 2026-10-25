@@ -13,7 +13,7 @@ on:
       - '.github/ISSUE_TEMPLATE/tv-compatibility.yml'
       - 'tools/update-tv-compatibility.py'
       - 'README.md'
-      - 'README.en.md'
+      - 'README.es.md'
 
 permissions:
   contents: write
@@ -52,7 +52,7 @@ jobs:
           delete-branch: true
           add-paths: |
             README.md
-            README.en.md
+            README.es.md
           commit-message: "docs: sync community TV installation reports"
           title: "docs: update community TV installation reports"
           body: |

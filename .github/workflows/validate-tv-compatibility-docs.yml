@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - 'README.md'
-      - 'README.en.md'
+      - 'README.es.md'
       - 'tools/update-tv-compatibility.py'
       - 'tools/test_tv_compatibility_docs.py'
       - '.github/ISSUE_TEMPLATE/tv-compatibility.yml'
@@ -33,4 +33,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify READMEs match generated report tables
-        run: git diff --exit-code -- README.md README.en.md
+        run: git diff --exit-code -- README.md README.es.md

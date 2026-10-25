@@ -9,7 +9,37 @@ SPEC = importlib.util.spec_from_file_location("tv_compatibility_docs", SOURCE)
 compat = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(compat)
 
-FORM = """### 品牌 / Brand
+FORM = """### Brand / Marca
+
+Sony
+
+### Model / Modelo
+
+XR-55A80J
+
+### Android version / Versión de Android
+
+Android 12 (API 31)
+
+### Lumen version / Versión de Lumen
+
+v3.4.0
+
+### APK type / Tipo de APK
+
+Standard / Estándar
+
+### Installation result / Resultado de la instalación
+
+Installed and launches / Instalado y se abre
+
+### Observations, feature tests and logs / Observaciones, pruebas y registros
+
+HDMI tested.
+"""
+
+# A report filed with the earlier Chinese/English form.
+LEGACY_FORM = """### 品牌 / Brand
 
 Sony
 
@@ -32,10 +62,6 @@ Standard / 标准版
 ### 安装结果 / Installation result
 
 Installed and launches / 已安装且启动
-
-### 实际现象、功能测试和日志 / Observations, feature tests and logs
-
-HDMI tested.
 """
 
 
@@ -54,6 +80,11 @@ class TVCompatibilityDocsTest(unittest.TestCase):
         self.assertEqual("Sony", form["brand"])
         self.assertEqual("XR-55A80J", form["model"])
         self.assertEqual("Installed and launches", form["outcome"])
+
+    def test_parses_reports_filed_with_the_earlier_form(self):
+        form = compat.form_fields(LEGACY_FORM)
+        self.assertEqual("XR-55A80J", form["model"])
+        self.assertEqual("Standard", form["apk"])
 
     def test_parses_windows_line_endings(self):
         form = compat.form_fields(FORM.replace("\n", "\r\n"))
@@ -76,27 +107,27 @@ class TVCompatibilityDocsTest(unittest.TestCase):
     def test_closed_issue_does_not_imply_a_verified_fix(self):
         issue = self.issue(number=15)
         issue["state"] = "closed"
-        self.assertIn("已关闭（未验证修复）", compat.build([issue], False))
+        self.assertIn("Cerrado (arreglo sin verificar)", compat.build([issue], False))
         self.assertIn("Closed (fix unverified)", compat.build([issue], True))
 
     def test_both_languages_are_reported_not_verified(self):
-        zh = compat.build([self.issue()], False)
+        es = compat.build([self.issue()], False)
         en = compat.build([self.issue()], True)
-        self.assertIn("已安装且能启动（自报）", zh)
+        self.assertIn("Instalado y se abre (informado)", es)
         self.assertIn("Installed and launched (reported)", en)
-        self.assertIn("https://github.com/lesnolie/Lumen/issues/12", zh)
-        self.assertIn("v2.0.2", en)
+        self.assertIn("https://github.com/luumlabs/lumen-tv/issues/12", es)
+        self.assertIn("v3.4.0", en)
 
     def test_malicious_or_multiline_model_is_escaped(self):
         self.assertEqual("&lt;img src=x&gt; &#124; &#91;h&#93;",
                          compat.clean("<img src=x> | [h]"))
 
     def test_invalid_dropdown_is_rejected(self):
-        bad = FORM.replace("Installed and launches / 已安装且启动", "Supported across all TV brands")
+        bad = FORM.replace("Installed and launches / Instalado y se abre", "Supported across all TV brands")
         self.assertIsNone(compat.form_fields(bad))
 
     def test_markers_exist_once_in_both_readmes(self):
-        for name in ("README.md", "README.en.md"):
+        for name in ("README.md", "README.es.md"):
             content = Path(name).read_text(encoding="utf-8")
             self.assertEqual(1, content.count(compat.START), name)
             self.assertEqual(1, content.count(compat.END), name)

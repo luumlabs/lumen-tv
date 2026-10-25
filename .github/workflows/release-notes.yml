@@ -1,0 +1,45 @@
+name: Sync release notes
+
+# Keeps every published release's title and description in step with docs/releases/<tag>.md,
+# so notes can be corrected after a release is out. Releases without a notes file are left alone.
+on:
+  push:
+    branches:
+      - main
+      # Temporary: applies the rewritten notes before this branch is merged.
+      - claude/trusting-archimedes-f0eyve
+    paths:
+      - 'docs/releases/**'
+      - '.github/workflows/release-notes.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-notes
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update published releases from docs/releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release list --limit 200 --json tagName --jq '.[].tagName' > "$RUNNER_TEMP/tags.txt"
+          while read -r tag; do
+            notes="docs/releases/$tag.md"
+            if [ ! -f "$notes" ]; then
+              echo "::notice::$tag has no notes file; left unchanged"
+              continue
+            fi
+            gh release edit "$tag" --title "Lumen TV ${tag#v}" --notes-file "$notes" > /dev/null
+            echo "Updated $tag"
+          done < "$RUNNER_TEMP/tags.txt"

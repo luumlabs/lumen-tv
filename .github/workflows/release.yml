@@ -59,7 +59,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" "dist/Lumen-$GITHUB_REF_NAME.apk" "dist/Lumen-guard-$GITHUB_REF_NAME.apk" "dist/SHA256SUMS-$GITHUB_REF_NAME.txt" \
-            --verify-tag --title "Lumen ${GITHUB_REF_NAME#v}" --notes-file "docs/releases/$GITHUB_REF_NAME.md" --latest
+            --verify-tag --title "Lumen TV ${GITHUB_REF_NAME#v}" --notes-file "docs/releases/$GITHUB_REF_NAME.md" --latest
       - name: Remove signing key
         if: always()
         run: rm -f "$RUNNER_TEMP/tigris.keystore"
