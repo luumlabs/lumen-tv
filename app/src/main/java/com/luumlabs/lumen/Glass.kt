@@ -31,25 +31,32 @@ object LiquidGlass {
      * real glass disperses light. The rim is a crisp line lit from the top left
      * with a soft bevel glow inside it, and the lower edge darkens a touch, which
      * is what gives the slab its thickness.
+     *
+     * [clear] is the transparent variant of Liquid Glass: hardly blurred or tinted, so what is
+     * behind reads through it, with a deeper lens at the rim and stronger highlights.
+     *
+     * What is behind is blurred at half resolution and sampled from there: once blurred it looks
+     * the same, and it is a quarter of the work and memory, which matters on a TV's CPU.
      */
-    fun bake(source: Bitmap, screenW: Int, screenH: Int, rect: Rect, radius: Float, overlay: Drawable? = null): Bitmap {
+    fun bake(source: Bitmap, screenW: Int, screenH: Int, rect: Rect, radius: Float, overlay: Drawable? = null, clear: Boolean = false): Bitmap {
         val w = rect.width()
         val h = rect.height()
         // Match Canvas round-rect geometry for capsules, including when the requested radius exceeds half the short side.
         val cornerRadius = radius.coerceIn(0f, min(w, h) / 2f)
-        val zone = min(h * 0.3f, cornerRadius * 1.5f)     // refracting band along the rim
-        val pull = zone * 0.95f                       // how far the rim reaches outside
-        val blurR = 6
-        val margin = (pull * 1.15f + blurR * 3 + 2).toInt()
+        val zone = if (clear) min(h * 0.36f, cornerRadius * 1.8f) else min(h * 0.3f, cornerRadius * 1.5f)
+        val pull = zone * (if (clear) 1.1f else 0.95f)
+        val blurR = if (clear) 2 else 3                 // at half resolution
+        val margin = (pull * 1.2f + blurR * 6 + 4).toInt()
 
-        // The part of the screen around the slab, as the user sees it.
+        // The part of the screen around the slab, as the user sees it, at half size.
         val x0 = rect.left - margin
         val y0 = rect.top - margin
-        val cw = w + margin * 2
-        val ch = h + margin * 2
+        val cw = (w + margin * 2) / 2
+        val ch = (h + margin * 2) / 2
         val region = Bitmap.createBitmap(cw, ch, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(region)
         canvas.drawColor(Color.BLACK)
+        canvas.scale(0.5f, 0.5f)
         canvas.translate(-x0.toFloat(), -y0.toFloat())
         val s = max(screenW / source.width.toFloat(), screenH / source.height.toFloat())
         val m = Matrix().apply {
@@ -62,19 +69,22 @@ object LiquidGlass {
         region.getPixels(src, 0, cw, 0, 0, cw, ch)
         region.recycle()
         // Three box passes come close to a Gaussian blur: frosted, without the boxy halo of two.
-        repeat(3) { boxBlur(src, cw, ch, blurR) }
+        repeat(if (clear) 2 else 3) { boxBlur(src, cw, ch, blurR) }
 
         val out = IntArray(w * h)
         val hw = w / 2f
         val hh = h / 2f
-        val rimW = 1.6f
-        val bevel = min(cornerRadius * 0.45f, h * 0.12f).coerceAtLeast(4f)
+        val rimW = if (clear) 1.8f else 1.6f
+        val bevel = min(cornerRadius * 0.5f, h * 0.14f).coerceAtLeast(4f)
         val shade = bevel * 1.4f
+        val sat = if (clear) 1.12f else 1.28f
+        val keep = if (clear) 0.95f else 0.84f
+        val lift = if (clear) 10f else 32f
         for (j in 0 until h) {
             val py = j + 0.5f
             // A faint sheen over the upper part, as light falling on a curved top surface.
             val top = (1f - py / (h * 0.5f)).coerceAtLeast(0f)
-            val sheen = top * top * 0.07f
+            val sheen = top * top * (if (clear) 0.09f else 0.07f)
             for (i in 0 until w) {
                 val px = i + 0.5f
                 // Signed distance to the rounded rectangle (negative inside).
@@ -97,16 +107,18 @@ object LiquidGlass {
 
                 val t = (1f - depth / zone).coerceIn(0f, 1f)
                 val off = t * t * pull
-                val sx = px + margin
-                val sy = py + margin
+                // Coordinates in the half-size blurred region.
+                val sx = (px + margin) * 0.5f
+                val sy = (py + margin) * 0.5f
                 var r: Float
                 var g: Float
                 var b: Float
                 if (off > 0.75f) {
                     // Dispersion: red bends a little less than green, blue a little more.
-                    val cg = sample(src, cw, ch, sx + nx * off, sy + ny * off)
-                    val cr = sample(src, cw, ch, sx + nx * off * 0.9f, sy + ny * off * 0.9f)
-                    val cb = sample(src, cw, ch, sx + nx * off * 1.12f, sy + ny * off * 1.12f)
+                    val o = off * 0.5f
+                    val cg = sample(src, cw, ch, sx + nx * o, sy + ny * o)
+                    val cr = sample(src, cw, ch, sx + nx * o * 0.9f, sy + ny * o * 0.9f)
+                    val cb = sample(src, cw, ch, sx + nx * o * 1.12f, sy + ny * o * 1.12f)
                     r = Color.red(cr).toFloat(); g = Color.green(cg).toFloat(); b = Color.blue(cb).toFloat()
                 } else {
                     val c = sample(src, cw, ch, sx, sy)
@@ -114,8 +126,8 @@ object LiquidGlass {
                 }
                 // A little milky and a little more saturated than what is behind.
                 val luma = r * 0.3f + g * 0.59f + b * 0.11f
-                r = luma + (r - luma) * 1.28f; g = luma + (g - luma) * 1.28f; b = luma + (b - luma) * 1.28f
-                r = r * 0.84f + 32f; g = g * 0.84f + 32f; b = b * 0.84f + 32f
+                r = luma + (r - luma) * sat; g = luma + (g - luma) * sat; b = luma + (b - luma) * sat
+                r = r * keep + lift; g = g * keep + lift; b = b * keep + lift
                 if (sheen > 0f) { r += (255f - r) * sheen; g += (255f - g) * sheen; b += (255f - b) * sheen }
 
                 // Light from the top left: strongest on the edge facing it, a softer reflection on
@@ -130,12 +142,12 @@ object LiquidGlass {
                 }
                 // Bevel: a soft glow just inside the lit edge.
                 if (depth < bevel) {
-                    val k = (1f - depth / bevel).let { it * it } * (0.26f * lit + 0.08f * back)
+                    val k = (1f - depth / bevel).let { it * it } * (if (clear) 0.34f * lit + 0.12f * back else 0.26f * lit + 0.08f * back)
                     r += (255f - r) * k; g += (255f - g) * k; b += (255f - b) * k
                 }
                 // Specular rim, crisp and thin.
                 if (depth < rimW) {
-                    val k = (1f - depth / rimW).coerceIn(0f, 1f) * (0.28f + 0.62f * lit + 0.34f * back)
+                    val k = (1f - depth / rimW).coerceIn(0f, 1f) * (0.3f + 0.62f * lit + 0.36f * back)
                     r += (255f - r) * k; g += (255f - g) * k; b += (255f - b) * k
                 }
                 out[j * w + i] = Color.argb((a * 255).toInt(), clamp(r), clamp(g), clamp(b))
@@ -177,8 +189,21 @@ object LiquidGlass {
 
     private fun clamp(v: Float) = v.toInt().coerceIn(0, 255)
 
-    private fun sample(px: IntArray, w: Int, h: Int, x: Float, y: Float): Int =
-        px[y.toInt().coerceIn(0, h - 1) * w + x.toInt().coerceIn(0, w - 1)]
+    /** Bilinear: the blurred picture is at half size, and nearest-pixel reads would show its grain. */
+    private fun sample(px: IntArray, w: Int, h: Int, x: Float, y: Float): Int {
+        val fx = (x - 0.5f).coerceIn(0f, (w - 1).toFloat())
+        val fy = (y - 0.5f).coerceIn(0f, (h - 1).toFloat())
+        val x0 = fx.toInt(); val y0 = fy.toInt()
+        val x1 = (x0 + 1).coerceAtMost(w - 1); val y1 = (y0 + 1).coerceAtMost(h - 1)
+        val tx = fx - x0; val ty = fy - y0
+        val c00 = px[y0 * w + x0]; val c10 = px[y0 * w + x1]; val c01 = px[y1 * w + x0]; val c11 = px[y1 * w + x1]
+        fun ch(shift: Int): Int {
+            val a = ((c00 shr shift) and 255) * (1 - tx) + ((c10 shr shift) and 255) * tx
+            val b = ((c01 shr shift) and 255) * (1 - tx) + ((c11 shr shift) and 255) * tx
+            return (a * (1 - ty) + b * ty).toInt()
+        }
+        return (0xFF shl 24) or (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
+    }
 
     /** Separable box blur in place; three channels, opaque output. */
     fun boxBlur(px: IntArray, w: Int, h: Int, r: Int) {

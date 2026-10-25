@@ -487,6 +487,7 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
                 frost.setImageBitmap(blurred)
                 scrollGlass.texture(blurred)
                 glassSource.wall = blurred
+                bakeWidgets()
                 val old = bgPhoto
                 val next = android.graphics.drawable.BitmapDrawable(resources, bmp)
                 if (old == null) {
@@ -563,6 +564,36 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
                 homeDock = glass
                 if (!shelfShown) setDock(glass, 500)
                 control.refreshGlass()
+                bakeWidgets()
+            }
+        }
+    }
+
+    /** Counts widget bakes, so a slow one finishing after a newer one is dropped. */
+    @Volatile private var widgetGen = 0
+
+    /**
+     * Bakes clear Liquid Glass for each widget over exactly what is behind it (the wallpaper and the
+     * colour wash), as the dock's glass is baked; the widgets show their live approximation until then.
+     */
+    private fun bakeWidgets() {
+        val base = homeBase ?: return
+        if (!widgetsEnabled || scrollY > 0 || shelfShown) return
+        val at = IntArray(2)
+        val jobs = shownWidgets().mapNotNull { w ->
+            if (w.width == 0) return@mapNotNull null
+            w.getLocationInWindow(at)
+            w to Rect(at[0], at[1], at[0] + w.w, at[1] + w.h)
+        }.ifEmpty { return }
+        val overlay = ambientOverlay()
+        val radius = dp(26).toFloat()
+        val gen = ++widgetGen
+        io.execute {
+            if (gen != widgetGen) return@execute
+            val baked = jobs.map { (w, r) -> w to LiquidGlass.bake(base, sw, sh, r, radius, overlay, clear = true).also { it.prepareToDraw() } }
+            main.post {
+                if (gen != widgetGen || isDestroyed) return@post
+                for ((w, b) in baked) w.glass.baked = b
             }
         }
     }
@@ -570,7 +601,9 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
     /** Washes the background in [colours] and bakes the dock's glass over them once they settle. */
     private fun showAmbient(colours: IntArray) {
         if (!prefs.appTint) return
-        if (ambient.show(colours)) scheduleDockBake(700)
+        // The glass is re-baked only once focus has rested: a bake is CPU work, and it must not
+        // land in the middle of the user moving along a row.
+        if (ambient.show(colours)) scheduleDockBake(1300)
     }
 
     /** Picks up a change of [Prefs.appTint] made in settings. */
@@ -859,7 +892,7 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
         pkg?.let { repo.paletteFor(it) }?.let { colours ->
             pendingColours = colours
             main.removeCallbacks(ambientShow)
-            main.postDelayed(ambientShow, if (ambient.current == null) 0 else 140)
+            main.postDelayed(ambientShow, if (ambient.current == null) 0 else 220)
         }
         main.removeCallbacks(shelfShow)
         if (pos < cols && pkg != null && Shelf.has(pkg) && moving < 0) {
@@ -886,9 +919,34 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
         val opts = ActivityOptions.makeScaleUpAnimation(cell.card, 0, 0, cell.card.width, cell.card.height)
         try {
             startActivity(intent, opts.toBundle())
+            rememberLaunch(cell)
             rememberOpened(app.pkg)
         } catch (e: Exception) {
             Toast.makeText(this, "Can't open ${app.label}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Where the last app opened from the grid came from, for the zoom back on return. */
+    private var returnPivot: android.graphics.PointF? = null
+    private val zoomTween = Tween()
+
+    private fun rememberLaunch(cell: TileCell) {
+        val at = IntArray(2)
+        cell.card.getLocationInWindow(at)
+        returnPivot = android.graphics.PointF(at[0] + cell.card.width / 2f, at[1] + cell.card.height / 2f)
+    }
+
+    /**
+     * Back from an app, the home screen settles from slightly enlarged around the tile the app was
+     * opened from, as tvOS shrinks an app back into its icon. Scale only: fading the whole scene
+     * would render it offscreen on every frame.
+     */
+    private fun zoomBack(p: android.graphics.PointF) {
+        scene.pivotX = p.x
+        scene.pivotY = p.y
+        zoomTween.start(560, Motion.soft, end = { scene.scaleX = 1f; scene.scaleY = 1f }) { f ->
+            scene.scaleX = lerp(1.06f, 1f, f)
+            scene.scaleY = scene.scaleX
         }
     }
 
@@ -1252,6 +1310,7 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
         applyTint()
         control.applyStyle()
         if (wakeIntro) { wakeIntro = false; playIntro(wake = true) }
+        returnPivot?.let { p -> returnPivot = null; if (intro == null && !Device.isLowEnd(this)) zoomBack(p) }
         resumed = true
         prefs.homeInFront = true
         HomeGuardService.onHomeResumed()
@@ -1303,6 +1362,10 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
         scene.addView(widgets, FrameLayout.LayoutParams(-2, h).apply {
             leftMargin = side; topMargin = dockRect.top - dp(26) - h
         })
+        // The glass is baked for where the widgets end up, once they are laid out (or switched on or off).
+        widgets.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
+            if (l != ol || t != ot || r != or || b != ob) widgets.post { bakeWidgets() }
+        }
         for (w in listOf<WidgetCard>(weatherWidget, chartsWidget)) w.setOnKeyListener { _, code, e ->
             if (e.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
             when (code) {
@@ -1400,7 +1463,7 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
         }
         setGridBlocked(true)
         chartsWidget.stop()
-        chartsView = ChartsView(this, root, list, chartsWidget.current, chartsWidget.country, repo) {
+        chartsView = ChartsView(this, root, list, chartsWidget.current, chartsWidget.item, chartsWidget.country, repo) {
             chartsView = null
             setGridBlocked(false)
             chartsWidget.requestFocus()

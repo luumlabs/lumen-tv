@@ -34,19 +34,14 @@ fun Context.top10Badge(size: Float = 11f): TextView = text(size, weight = 800).a
     }
 }
 
-/** A poster with its rank beside it in large figures, the way Apple TV lays out a Top 10 row. */
-class RankedPoster(ctx: Context, val posterW: Int, val posterH: Int, private val numeralSp: Float) : FrameLayout(ctx) {
-    val numeral = ctx.text(numeralSp, weight = 800).apply {
-        includeFontPadding = false
-        isSingleLine = true
-        letterSpacing = -0.06f
-        gravity = Gravity.BOTTOM or Gravity.END
-        setShadowLayer(dp(8).toFloat(), 0f, dp(2).toFloat(), Color.argb(150, 0, 0, 0))
-    }
-    val numeralW = (posterW * 0.5f).toInt()
+/**
+ * A poster with its rank set inside it, bottom left over a soft shade, so ranks never collide with
+ * the poster beside them. Focused, it lifts on a spring over a shared soft shadow.
+ */
+class RankedPoster(ctx: Context, val posterW: Int, val posterH: Int) : FrameLayout(ctx) {
     private val shadowPad = dp(18)
     private val shadow = ImageView(ctx).apply {
-        setImageBitmap(shadowFor(posterW, posterH, dp(10).toFloat(), shadowPad))
+        setImageBitmap(shadowFor(posterW, posterH, dp(12).toFloat(), shadowPad))
         alpha = 0f
     }
     val card = FrameLayout(ctx)
@@ -54,7 +49,13 @@ class RankedPoster(ctx: Context, val posterW: Int, val posterH: Int, private val
         scaleType = ImageView.ScaleType.CENTER_CROP
         setBackgroundColor(Color.argb(50, 255, 255, 255))
     }
-    private val rim = GlassRim(dp(10).toFloat(), resources.displayMetrics.density * 1.1f).apply { strength = 0.45f }
+    private val numeral = ctx.text(posterH * 0.2f / resources.displayMetrics.scaledDensity, weight = 800).apply {
+        includeFontPadding = false
+        isSingleLine = true
+        letterSpacing = -0.04f
+        setShadowLayer(dp(6).toFloat(), 0f, dp(1).toFloat(), Color.argb(170, 0, 0, 0))
+    }
+    private val rim = GlassRim(dp(12).toFloat(), resources.displayMetrics.density * 1.1f).apply { strength = 0.4f }
     private val focus = Tween()
     var lit = false
         private set
@@ -62,14 +63,41 @@ class RankedPoster(ctx: Context, val posterW: Int, val posterH: Int, private val
     init {
         clipChildren = false
         clipToPadding = false
-        addView(numeral, LayoutParams(numeralW + dp(14), posterH, Gravity.START or Gravity.BOTTOM))
-        addView(shadow, LayoutParams(posterW + shadowPad * 2, posterH + shadowPad * 2).apply { leftMargin = numeralW - shadowPad })
+        addView(shadow, LayoutParams(posterW + shadowPad * 2, posterH + shadowPad * 2))
+        shadow.translationX = -shadowPad.toFloat()
         shadow.translationY = -shadowPad.toFloat()
         card.addView(image, LayoutParams(-1, -1))
+        card.addView(View(ctx).apply {
+            background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(Color.argb(170, 0, 0, 0), Color.TRANSPARENT))
+        }, LayoutParams(-1, (posterH * 0.42f).toInt(), Gravity.BOTTOM))
+        card.addView(numeral, LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply { leftMargin = dp(8); bottomMargin = dp(5) })
         card.foreground = rim
-        card.clipRounded(dp(10).toFloat())
-        addView(card, LayoutParams(posterW, posterH).apply { leftMargin = numeralW })
-        numeral.alpha = 0.8f
+        card.clipRounded(dp(12).toFloat())
+        addView(card, LayoutParams(posterW, posterH))
+    }
+
+    fun setRank(n: Int) { numeral.text = n.toString() }
+
+    /** Lifts the poster on a spring, or lets it back down. */
+    fun setLit(on: Boolean, scale: Float = 1.12f) {
+        if (on == lit) return
+        lit = on
+        val s0 = card.scaleX
+        val s1 = if (on) scale else 1f
+        val a0 = shadow.alpha
+        val y0 = shadow.translationY
+        val r0 = rim.strength
+        translationZ = if (on) 1f else 0f
+        card.pivotX = posterW / 2f; card.pivotY = posterH.toFloat()
+        shadow.pivotX = posterW / 2f + shadowPad; shadow.pivotY = (posterH + shadowPad).toFloat()
+        focus.start(if (on) 460 else 260, if (on) Motion.lift else Motion.soft) { p ->
+            val e = Motion.emphasized.getInterpolation(p.coerceIn(0f, 1f))
+            card.scaleX = lerp(s0, s1, p); card.scaleY = card.scaleX
+            shadow.scaleX = card.scaleX; shadow.scaleY = card.scaleX
+            shadow.alpha = lerp(a0, if (on) 0.85f else 0f, e)
+            shadow.translationY = lerp(y0, -shadowPad + if (on) dp(10).toFloat() else 0f, e)
+            rim.strength = lerp(r0, if (on) 1f else 0.4f, e)
+        }
     }
 
     companion object {
@@ -79,83 +107,77 @@ class RankedPoster(ctx: Context, val posterW: Int, val posterH: Int, private val
         fun shadowFor(w: Int, h: Int, radius: Float, pad: Int): Bitmap =
             shadows.getOrPut(w.toLong() shl 32 or h.toLong()) { LiquidGlass.shadow(w, h, radius, pad) }
     }
-
-    /** Two figures ("10") are set smaller, so they fit the same space as one. */
-    fun setRank(n: Int) {
-        numeral.text = n.toString()
-        numeral.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, if (n >= 10) numeralSp * 0.68f else numeralSp)
-    }
-
-    /** Lifts the poster on a spring (and lights its rank), or lets it back down. */
-    fun setLit(on: Boolean, scale: Float = 1.14f) {
-        if (on == lit) return
-        lit = on
-        val s0 = card.scaleX
-        val s1 = if (on) scale else 1f
-        val a0 = shadow.alpha
-        val n0 = numeral.alpha
-        val r0 = rim.strength
-        translationZ = if (on) 1f else 0f
-        card.pivotX = posterW / 2f; card.pivotY = posterH.toFloat()
-        shadow.pivotX = (posterW / 2f + shadowPad); shadow.pivotY = (posterH + shadowPad).toFloat()
-        focus.start(if (on) 520 else 260, if (on) Motion.spring else Motion.soft) { p ->
-            val e = p.coerceAtMost(1f)
-            card.scaleX = lerp(s0, s1, p); card.scaleY = card.scaleX
-            shadow.scaleX = card.scaleX; shadow.scaleY = card.scaleX
-            shadow.alpha = lerp(a0, if (on) 0.9f else 0f, e)
-            numeral.alpha = lerp(n0, if (on) 1f else 0.8f, e)
-            rim.strength = lerp(r0, if (on) 1f else 0.45f, e)
-        }
-    }
 }
 
 /**
- * The Top 10 on the home screen: the chart's name under a TOP 10 badge and its first five posters
- * with their ranks, on glass. Every few seconds it turns to the next chart; OK opens them all.
+ * The Top 10 on the home screen as a moving poster: one title at a time, its backdrop filling the
+ * glass, its rank in large figures beside its name, the year, genre and score, and ten dots for
+ * where it stands. It moves down the chart every few seconds and on to the next chart after the
+ * tenth, holding still while focused. OK opens the full charts at the title showing.
  */
 class ChartsWidget(ctx: Context, source: GlassSource, w: Int, h: Int) : WidgetCard(ctx, source, w, h) {
-    private val name = ctx.text(15f, weight = 700).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
-    private val where = ctx.text(12f, Color.argb(160, 255, 255, 255), weight = 600)
-    private val strip = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false }
+    private val arts = arrayOf(art(), art())
+    private var front = 0
+    private val label = ctx.text(11.5f, Color.argb(215, 255, 255, 255), weight = 700).apply { letterSpacing = 0.06f; maxLines = 1 }
+    private val rank = ctx.text(40f, weight = 800).apply { includeFontPadding = false; letterSpacing = -0.04f }
+    private val title = ctx.text(17f, weight = 700).apply {
+        maxLines = 2
+        ellipsize = android.text.TextUtils.TruncateAt.END
+        setLineSpacing(0f, 1.04f)
+    }
+    private val meta = ctx.text(12.5f, Color.argb(205, 255, 255, 255), weight = 500).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+    private val dots = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
     private val header = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-    private val empty = ctx.text(14f, Color.argb(200, 255, 255, 255), weight = 500).apply { gravity = Gravity.CENTER; text = "Loading this week’s Top 10…" }
-    private val posters = ArrayList<RankedPoster>()
+    private val block = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.TOP }
+    private val shade = View(ctx).apply { background = HeroShade() }
+    private val empty = ctx.text(14f, Color.argb(205, 255, 255, 255), weight = 500).apply { gravity = Gravity.CENTER; text = "Loading this week’s Top 10…" }
     private val main = Handler(Looper.getMainLooper())
+    private val kenBurns = !Device.isLowEnd(ctx)
     var charts: List<Charts.Chart> = emptyList()
         private set
     var current = 0
+        private set
+    var item = 0
         private set
     var country = ""
     private var rotating = false
     private val turn = object : Runnable {
         override fun run() {
             if (!rotating) return
-            // Hold still while the user is on it, or while there is nothing to turn to.
-            if (!isFocused && charts.size > 1) turnTo((current + 1) % charts.size)
+            // Hold still while the user is on it, or while there is nothing to move to.
+            if (!isFocused && charts.isNotEmpty()) advance()
             main.postDelayed(this, ROTATE_MS)
         }
     }
     private var pending: Runnable? = null
+    /** The glass edge over the artwork, which would otherwise hide the pane's own rim. */
+    private val rim = GlassRim(dp(26).toFloat(), resources.displayMetrics.density * 1.3f).apply { strength = 0.5f }
+    private val rimTween = Tween()
 
     init {
         contentDescription = "Top 10"
+        body.foreground = rim
+        arts.forEach { body.addView(it, FrameLayout.LayoutParams(-1, -1)) }
+        body.addView(shade, FrameLayout.LayoutParams(-1, -1))
         val p = dp(16)
-        header.addView(ctx.top10Badge())
-        header.addView(name, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(9) })
-        header.addView(where)
-        body.addView(header, FrameLayout.LayoutParams(-1, -2).apply { leftMargin = p; rightMargin = p; topMargin = dp(12) })
-        val posterH = h - dp(12) - dp(22) - dp(14) - dp(12)
-        val posterW = posterH * 2 / 3
-        val slots = ((w - p * 2 + dp(6)) / (posterW * 1.5f + dp(6))).toInt().coerceIn(3, 6)
-        for (k in 0 until slots) {
-            val rp = RankedPoster(ctx, posterW, posterH, posterH * 0.55f / resources.displayMetrics.scaledDensity)
-            posters += rp
-            strip.addView(rp, LinearLayout.LayoutParams(rp.numeralW + posterW, posterH).apply { if (k > 0) marginStart = dp(6) })
+        header.addView(ctx.top10Badge(10f))
+        header.addView(label, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(8) })
+        body.addView(header, FrameLayout.LayoutParams(-2, -2).apply { leftMargin = p; topMargin = dp(14) })
+        val words = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(title)
+            addView(meta, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(3) })
         }
-        body.addView(strip, FrameLayout.LayoutParams(-2, posterH, Gravity.BOTTOM).apply { leftMargin = p - dp(4); bottomMargin = dp(12) })
+        block.addView(rank, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(10) })
+        block.addView(words, LinearLayout.LayoutParams((w * 0.5f).toInt(), -2).apply { topMargin = dp(3) })
+        body.addView(block, FrameLayout.LayoutParams(-2, -2).apply { leftMargin = p; topMargin = dp(42) })
+        body.addView(dots, FrameLayout.LayoutParams(-2, dp(6), Gravity.BOTTOM or Gravity.START).apply { leftMargin = p + dp(1); bottomMargin = dp(14) })
         body.addView(empty, FrameLayout.LayoutParams(-1, -1))
+        listOf(label, rank, title, meta).forEach { it.setShadowLayer(dp(8).toFloat(), 0f, dp(1).toFloat(), Color.argb(150, 0, 0, 0)) }
         show(null)
     }
+
+    private fun art() = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; alpha = 0f }
 
     /** Shows [list], or the loading line (or [failed]'s message) while there is none. */
     fun show(list: List<Charts.Chart>?, failed: Boolean = false) {
@@ -165,44 +187,91 @@ class ChartsWidget(ctx: Context, source: GlassSource, w: Int, h: Int) : WidgetCa
         val has = charts.isNotEmpty()
         empty.visibility = if (has) View.GONE else View.VISIBLE
         empty.text = if (failed) "Top 10 unavailable right now.\nCheck the TV’s internet connection." else "Loading this week’s Top 10…"
-        header.visibility = if (has) View.VISIBLE else View.INVISIBLE
-        strip.visibility = header.visibility
-        if (has) render(current.coerceIn(0, charts.size - 1))
+        for (v in listOf(header, block, dots, shade)) v.visibility = if (has) View.VISIBLE else View.INVISIBLE
+        if (!has) { arts.forEach { it.alpha = 0f }; return }
+        current = current.coerceIn(0, charts.size - 1)
+        item = item.coerceIn(0, (charts[current].items.size - 1).coerceAtLeast(0))
+        render(animate = false)
     }
 
-    private fun render(i: Int) {
-        current = i
-        val chart = charts[i]
-        name.text = chart.label
-        where.text = country
-        posters.forEachIndexed { k, rp ->
-            val t = chart.items.getOrNull(k)
-            rp.visibility = if (t == null) View.INVISIBLE else View.VISIBLE
-            if (t == null) return@forEachIndexed
-            rp.setRank(k + 1)
-            rp.image.setImageBitmap(ChartImages.peek(t.poster))
-            if (ChartImages.peek(t.poster) == null) ChartImages.load(context, t.poster, 332, rgb565 = true) { b ->
-                if (charts.getOrNull(current) === chart) rp.image.setImageBitmap(b)
+    private fun title() = charts.getOrNull(current)?.items?.getOrNull(item)
+
+    /** Fills in the title showing, and brings in its backdrop. */
+    private fun render(animate: Boolean) {
+        val chart = charts.getOrNull(current) ?: return
+        val t = title() ?: return
+        label.text = chart.label.uppercase(java.util.Locale.US)
+        rank.text = (item + 1).toString()
+        title.text = t.name
+        meta.text = listOfNotNull(
+            t.year.takeIf { it > 0 }?.toString(),
+            t.genres.firstOrNull(),
+            t.imdb?.let { "IMDb %.1f".format(java.util.Locale.US, it) } ?: t.tomato?.let { "RT $it%" },
+        ).joinToString("  ·  ")
+        if (dots.childCount != chart.items.size) {
+            dots.removeAllViews()
+            repeat(chart.items.size) {
+                dots.addView(View(context).apply { background = rounded(Color.WHITE, dp(3).toFloat()) },
+                    LinearLayout.LayoutParams(dp(5), dp(5)).apply { if (it > 0) marginStart = dp(5) })
             }
         }
+        for (k in 0 until dots.childCount) {
+            val d = dots.getChildAt(k)
+            val on = k == item
+            if (animate) d.animate().alpha(if (on) 1f else 0.38f).scaleX(if (on) 1.3f else 1f).scaleY(if (on) 1.3f else 1f).setDuration(300).start()
+            else { d.alpha = if (on) 1f else 0.38f; d.scaleX = if (on) 1.3f else 1f; d.scaleY = d.scaleX }
+        }
+        val url = t.backdrop ?: t.poster
+        val wide = t.backdrop != null
+        val key = current to item
+        ChartImages.load(context, url, if (wide) 1280 else 332, rgb565 = true) { b ->
+            if (b == null || (current to item) != key || charts.isEmpty()) return@load
+            showArt(if (wide) b else Wallpapers.blurred(b, darken = 0.1f), animate)
+        }
+        // The next title's backdrop is on its way before its turn.
+        chart.items.getOrNull(item + 1)?.let { n -> ChartImages.load(context, n.backdrop ?: n.poster, if (n.backdrop != null) 1280 else 332, rgb565 = true) {} }
     }
 
-    /** Turns to chart [i]: the old one slides away and the new one follows, a few posters apart. */
-    private fun turnTo(i: Int) {
-        if (charts.isEmpty()) return
-        header.animate().alpha(0f).setDuration(160).start()
-        posters.forEachIndexed { k, rp -> rp.animate().alpha(0f).translationX(-dp(14).toFloat()).setStartDelay(k * 25L).setDuration(180).start() }
+    /** Cross-fades to [b], settling from a slight zoom, then drifting slowly while it is up. */
+    private fun showArt(b: Bitmap, animate: Boolean) {
+        val next = arts[1 - front]
+        val old = arts[front]
+        front = 1 - front
+        next.animate().cancel()
+        next.setImageBitmap(b)
+        next.bringToFront()
+        shade.bringToFront(); header.bringToFront(); block.bringToFront(); dots.bringToFront(); empty.bringToFront()
+        next.alpha = 0f
+        next.scaleX = 1.08f; next.scaleY = 1.08f
+        next.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(if (animate) 900 else 400).setStartDelay(0)
+            .setInterpolator(Motion.emphasized).withEndAction {
+                old.alpha = 0f
+                if (kenBurns && arts[front] === next) next.animate().scaleX(1.06f).scaleY(1.06f).setDuration(ROTATE_MS + 1500)
+                    .setInterpolator(android.view.animation.LinearInterpolator()).start()
+            }.start()
+    }
+
+    /** One step down the chart; after the last title, on to the next chart. */
+    private fun advance() {
+        val chart = charts.getOrNull(current) ?: return
+        if (item + 1 < chart.items.size) item++ else { current = (current + 1) % charts.size; item = 0 }
+        block.animate().alpha(0f).translationX(-dp(10).toFloat()).setDuration(170).setInterpolator(Motion.exit).start()
         pending?.let { main.removeCallbacks(it) }
         pending = Runnable {
             pending = null
-            // The charts may have been replaced, with fewer of them, since the turn began.
-            if (charts.isNotEmpty()) render(i.coerceIn(0, charts.size - 1))
-            header.animate().alpha(1f).setDuration(320).start()
-            posters.forEachIndexed { k, rp ->
-                rp.translationX = dp(18).toFloat()
-                rp.animate().alpha(1f).translationX(0f).setStartDelay(k * 40L).setDuration(420).setInterpolator(Motion.emphasized).start()
-            }
-        }.also { main.postDelayed(it, 260) }
+            if (charts.isEmpty()) return@Runnable
+            current = current.coerceIn(0, charts.size - 1)
+            item = item.coerceIn(0, (charts[current].items.size - 1).coerceAtLeast(0))
+            render(animate = true)
+            block.translationX = dp(14).toFloat()
+            block.animate().alpha(1f).translationX(0f).setDuration(460).setInterpolator(Motion.emphasized).start()
+        }.also { main.postDelayed(it, 190) }
+    }
+
+    override fun onFocus(f: Boolean) {
+        super.onFocus(f)
+        val r0 = rim.strength
+        rimTween.start(if (f) 420 else 260, Motion.ease) { p -> rim.strength = lerp(r0, if (f) 1f else 0.5f, p) }
     }
 
     fun start() {
@@ -214,7 +283,7 @@ class ChartsWidget(ctx: Context, source: GlassSource, w: Int, h: Int) : WidgetCa
     fun stop() {
         rotating = false
         main.removeCallbacks(turn)
-        // A turn caught half way finishes at once, so the widget is never left blank.
+        // A step caught half way finishes at once, so the widget is never left blank.
         pending?.let { main.removeCallbacks(it); it.run() }
     }
 
@@ -223,7 +292,26 @@ class ChartsWidget(ctx: Context, source: GlassSource, w: Int, h: Int) : WidgetCa
         super.onDetachedFromWindow()
     }
 
-    companion object { private const val ROTATE_MS = 9_000L }
+    /** Dark on the left behind the words and along the bottom behind the dots; the art shows on the right. */
+    private class HeroShade : Drawable() {
+        private val p = Paint()
+        private var shaders: List<Shader> = emptyList()
+        override fun onBoundsChange(b: android.graphics.Rect) {
+            val w = b.width().toFloat(); val h = b.height().toFloat()
+            shaders = listOf(
+                LinearGradient(0f, 0f, w, 0f, intArrayOf(Color.argb(230, 8, 8, 12), Color.argb(160, 8, 8, 12), Color.TRANSPARENT),
+                    floatArrayOf(0f, 0.42f, 0.78f), Shader.TileMode.CLAMP),
+                LinearGradient(0f, h * 0.5f, 0f, h, Color.TRANSPARENT, Color.argb(120, 0, 0, 0), Shader.TileMode.CLAMP),
+            )
+        }
+        override fun draw(c: Canvas) { for (s in shaders) { p.shader = s; c.drawRect(bounds, p) } }
+        override fun setAlpha(alpha: Int) {}
+        override fun setColorFilter(cf: ColorFilter?) {}
+        @Deprecated("Deprecated in Java")
+        override fun getOpacity() = PixelFormat.TRANSLUCENT
+    }
+
+    companion object { private const val ROTATE_MS = 6_500L }
 }
 
 /**
@@ -237,6 +325,7 @@ class ChartsView(
     private val host: FrameLayout,
     private val charts: List<Charts.Chart>,
     start: Int,
+    private val startItem: Int,
     private val country: String,
     private val repo: AppRepo,
     private val onClose: () -> Unit,
@@ -269,7 +358,7 @@ class ChartsView(
     private val content = FrameLayout(ctx).apply { clipChildren = false; clipToPadding = false }
     private val tabs = TabBar(ctx, charts.map { it.short })
     private val caption = ctx.text(14f, Color.argb(220, 255, 255, 255), weight = 700).apply { letterSpacing = 0.04f }
-    private val title = ctx.text(34f, weight = 800).apply {
+    private val title = ctx.text(32f, weight = 800).apply {
         maxLines = 2
         ellipsize = android.text.TextUtils.TruncateAt.END
         setLineSpacing(0f, 1.02f)
@@ -289,7 +378,7 @@ class ChartsView(
     }
     private val info = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
     private val strip = FrameLayout(ctx).apply { clipChildren = false; clipToPadding = false }
-    private val posterH = ctx.dp(112)
+    private val posterH = ctx.dp(124)
     private val posterW = posterH * 2 / 3
     private val items = ArrayList<RankedPoster>()
     private var itemW = 0
@@ -315,7 +404,6 @@ class ChartsView(
         info.addView(scores, LinearLayout.LayoutParams(-2, -2).apply { topMargin = ctx.dp(12) })
         info.addView(about, LinearLayout.LayoutParams((sw * 0.46f).toInt(), -2).apply { topMargin = ctx.dp(12) })
         info.addView(people, LinearLayout.LayoutParams((sw * 0.5f).toInt(), -2).apply { topMargin = ctx.dp(8) })
-        info.addView(provider, LinearLayout.LayoutParams(-2, -2).apply { topMargin = ctx.dp(12) })
         listOf(caption, title, meta, about, people).forEach { it.setShadowLayer(ctx.dp(8).toFloat(), 0f, ctx.dp(1).toFloat(), Color.argb(140, 0, 0, 0)) }
         content.addView(info, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply {
             leftMargin = side; bottomMargin = posterH + ctx.dp(34) + ctx.dp(40)
@@ -344,7 +432,7 @@ class ChartsView(
         content.scaleX = 1.04f; content.scaleY = 1.04f
         content.tweenScale(1f, 640, Motion.soft)
         root.requestFocus()
-        select(0, 0, first = true)
+        select(startItem.coerceIn(0, (charts[chart].items.size - 1).coerceAtLeast(0)), 0, first = true)
         return this
     }
 
@@ -386,15 +474,14 @@ class ChartsView(
         stripTween.cancel()
         strip.translationX = 0f
         val list = charts[chart].items
-        val numSp = posterH * 0.6f / ctx.resources.displayMetrics.scaledDensity
+        itemW = posterW + ctx.dp(24)
         list.forEachIndexed { k, t ->
-            val rp = RankedPoster(ctx, posterW, posterH, numSp)
-            itemW = rp.numeralW + posterW + ctx.dp(26)
+            val rp = RankedPoster(ctx, posterW, posterH)
             rp.setRank(k + 1)
             rp.image.setImageBitmap(ChartImages.peek(t.poster))
             if (ChartImages.peek(t.poster) == null) ChartImages.load(ctx, t.poster, 332, rgb565 = true) { b -> if (items.getOrNull(k) === rp) rp.image.setImageBitmap(b) }
             items += rp
-            strip.addView(rp, FrameLayout.LayoutParams(rp.numeralW + posterW, posterH, Gravity.BOTTOM).apply { leftMargin = k * itemW })
+            strip.addView(rp, FrameLayout.LayoutParams(posterW, posterH, Gravity.BOTTOM).apply { leftMargin = k * itemW })
             if (dir != 0) {
                 rp.alpha = 0f
                 rp.translationY = dir * ctx.dp(40).toFloat()
@@ -476,6 +563,11 @@ class ChartsView(
             else -> "Streaming on ${t.provider}"
         }
         provider.visibility = if (t.provider == null) View.GONE else View.VISIBLE
+        // Where it streams closes the row of scores, rather than taking a line of its own.
+        if (t.provider != null && provider.parent == null) {
+            scores.addView(provider, LinearLayout.LayoutParams(-2, -2))
+            scores.visibility = View.VISIBLE
+        }
         provider.tag = app
     }
 

@@ -38,7 +38,7 @@ class Ambient(ctx: Context) : FrameLayout(ctx) {
     }
 
     /** Fades to [colours] (vivid, deep, muted); false if they are already showing. */
-    fun show(colours: IntArray, ms: Long = 650): Boolean {
+    fun show(colours: IntArray, ms: Long = 520): Boolean {
         if (shown?.contentEquals(colours) == true) return false
         shown = colours
         val next = mesh(colours)

@@ -177,10 +177,11 @@ object WeatherData {
 }
 
 /**
- * A weather glyph drawn in the multicolour style of Apple's symbols: a golden sun, a pale moon,
- * white clouds, blue rain, a yellow bolt. Scales to any size, so no image files.
+ * A weather glyph drawn in the style of Apple's symbols: multicolour (a golden sun, a pale moon,
+ * white clouds, blue rain, a yellow bolt) or, with [mono], all in white for clear glass, the parts
+ * set apart by opacity. Scales to any size, so no image files.
  */
-class WeatherIcon(private var code: Int = 0, private var day: Boolean = true) : Drawable() {
+class WeatherIcon(private var code: Int = 0, private var day: Boolean = true, private val mono: Boolean = false) : Drawable() {
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
     private val path = Path()
     private val tmp = Path()
@@ -191,13 +192,16 @@ class WeatherIcon(private var code: Int = 0, private var day: Boolean = true) : 
         val b = bounds
         val s = minOf(b.width(), b.height()).toFloat()
         if (s <= 0f) return
-        c.save()
+        // The knockout around a cloud clears pixels: only ever inside a layer of the icon's own.
+        val knock = mono && (code == 1 || code == 2)
+        if (knock) c.saveLayer(b.left.toFloat(), b.top.toFloat(), b.right.toFloat(), b.bottom.toFloat(), null) else c.save()
         c.translate(b.left + (b.width() - s) / 2, b.top + (b.height() - s) / 2)
         c.scale(s, s)
         when (code) {
             0 -> if (day) sun(c, 0.5f, 0.5f, 0.22f) else moon(c, 0.5f, 0.5f, 0.3f)
             1, 2 -> {
                 if (day) sun(c, 0.62f, 0.36f, 0.16f) else moon(c, 0.64f, 0.34f, 0.2f)
+                if (mono) knockout(c, 0.08f, 0.4f, 0.74f)
                 cloud(c, 0.08f, 0.4f, 0.74f, if (code == 1) 0.85f else 1f)
             }
             3 -> { cloud(c, 0.22f, 0.24f, 0.62f, 0.55f); cloud(c, 0.06f, 0.34f, 0.84f, 1f) }
@@ -216,14 +220,14 @@ class WeatherIcon(private var code: Int = 0, private var day: Boolean = true) : 
         p.strokeCap = Paint.Cap.ROUND
         p.strokeWidth = r * 0.28f
         p.shader = null
-        p.color = Color.rgb(255, 204, 0)
+        p.color = if (mono) Color.WHITE else Color.rgb(255, 204, 0)
         for (k in 0 until 8) {
             val a = Math.PI * k / 4
             val c1 = cos(a).toFloat(); val s1 = sin(a).toFloat()
             c.drawLine(x + c1 * r * 1.42f, y + s1 * r * 1.42f, x + c1 * r * 1.85f, y + s1 * r * 1.85f, p)
         }
         p.style = Paint.Style.FILL
-        p.shader = RadialGradient(x - r * 0.3f, y - r * 0.3f, r * 1.4f, Color.rgb(255, 232, 92), Color.rgb(255, 176, 0), Shader.TileMode.CLAMP)
+        p.shader = if (mono) null else RadialGradient(x - r * 0.3f, y - r * 0.3f, r * 1.4f, Color.rgb(255, 232, 92), Color.rgb(255, 176, 0), Shader.TileMode.CLAMP)
         c.drawCircle(x, y, r, p)
         p.shader = null
     }
@@ -234,7 +238,8 @@ class WeatherIcon(private var code: Int = 0, private var day: Boolean = true) : 
         tmp.addCircle(x + r * 0.55f, y - r * 0.35f, r * 0.85f, Path.Direction.CW)
         path.op(tmp, Path.Op.DIFFERENCE)
         p.style = Paint.Style.FILL
-        p.shader = LinearGradient(x - r, y - r, x + r, y + r, Color.rgb(255, 250, 225), Color.rgb(214, 210, 190), Shader.TileMode.CLAMP)
+        if (mono) { p.shader = null; p.color = Color.WHITE }
+        else p.shader = LinearGradient(x - r, y - r, x + r, y + r, Color.rgb(255, 250, 225), Color.rgb(214, 210, 190), Shader.TileMode.CLAMP)
         c.drawPath(path, p)
         p.shader = null
     }
@@ -248,18 +253,41 @@ class WeatherIcon(private var code: Int = 0, private var day: Boolean = true) : 
         tmp.addCircle(x + w * 0.58f, y + h * 0.38f, h * 0.42f, Path.Direction.CW); path.op(tmp, Path.Op.UNION); tmp.reset()
         tmp.addCircle(x + w * 0.8f, y + h * 0.66f, h * 0.28f, Path.Direction.CW); path.op(tmp, Path.Op.UNION)
         p.style = Paint.Style.FILL
-        val top = Color.rgb((255 * shade).toInt(), (255 * shade).toInt(), (255 * shade).toInt())
-        val bottom = Color.rgb((214 * shade).toInt(), (224 * shade).toInt(), (236 * shade).toInt())
-        p.shader = LinearGradient(0f, y, 0f, y + h, top, bottom, Shader.TileMode.CLAMP)
+        if (mono) {
+            // A cloud in front of a sun or moon covers it; one behind another is set back by opacity.
+            p.shader = null
+            p.color = Color.argb((255 * shade * shade).toInt().coerceIn(90, 255), 255, 255, 255)
+        } else {
+            val top = Color.rgb((255 * shade).toInt(), (255 * shade).toInt(), (255 * shade).toInt())
+            val bottom = Color.rgb((214 * shade).toInt(), (224 * shade).toInt(), (236 * shade).toInt())
+            p.shader = LinearGradient(0f, y, 0f, y + h, top, bottom, Shader.TileMode.CLAMP)
+        }
         c.drawPath(path, p)
         p.shader = null
+    }
+
+    /** Clears a thin outline around the cloud so a white cloud stands apart from a white sun. */
+    private fun knockout(c: Canvas, x: Float, y: Float, w: Float) {
+        val h = w * 0.56f
+        path.reset(); tmp.reset()
+        path.addRoundRect(RectF(x, y + h * 0.48f, x + w, y + h), h * 0.26f, h * 0.26f, Path.Direction.CW)
+        tmp.addCircle(x + w * 0.32f, y + h * 0.52f, h * 0.34f, Path.Direction.CW); path.op(tmp, Path.Op.UNION); tmp.reset()
+        tmp.addCircle(x + w * 0.58f, y + h * 0.38f, h * 0.42f, Path.Direction.CW); path.op(tmp, Path.Op.UNION); tmp.reset()
+        tmp.addCircle(x + w * 0.8f, y + h * 0.66f, h * 0.28f, Path.Direction.CW); path.op(tmp, Path.Op.UNION)
+        p.shader = null
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 0.07f
+        p.xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.CLEAR)
+        c.drawPath(path, p)
+        p.xfermode = null
+        p.style = Paint.Style.FILL
     }
 
     private fun drops(c: Canvas, short: Boolean) {
         p.style = Paint.Style.STROKE
         p.strokeCap = Paint.Cap.ROUND
         p.strokeWidth = 0.07f
-        p.color = Color.rgb(90, 200, 250)
+        p.color = if (mono) Color.argb(210, 255, 255, 255) else Color.rgb(90, 200, 250)
         for (k in 0 until 3) {
             val x = 0.3f + k * 0.2f
             if (short) c.drawPoint(x - 0.02f, 0.78f, p).also { c.drawPoint(x - 0.06f, 0.9f, p) }
@@ -278,7 +306,7 @@ class WeatherIcon(private var code: Int = 0, private var day: Boolean = true) : 
         path.moveTo(0.52f, 0.6f); path.lineTo(0.38f, 0.8f); path.lineTo(0.5f, 0.8f)
         path.lineTo(0.44f, 0.97f); path.lineTo(0.64f, 0.74f); path.lineTo(0.52f, 0.74f); path.lineTo(0.6f, 0.6f); path.close()
         p.style = Paint.Style.FILL
-        p.color = Color.rgb(255, 204, 0)
+        p.color = if (mono) Color.WHITE else Color.rgb(255, 204, 0)
         c.drawPath(path, p)
     }
 
@@ -286,7 +314,7 @@ class WeatherIcon(private var code: Int = 0, private var day: Boolean = true) : 
         p.style = Paint.Style.STROKE
         p.strokeCap = Paint.Cap.ROUND
         p.strokeWidth = 0.06f
-        p.color = Color.argb(220, 210, 216, 226)
+        p.color = if (mono) Color.argb(180, 255, 255, 255) else Color.argb(220, 210, 216, 226)
         c.drawLine(0.16f, 0.74f, 0.84f, 0.74f, p)
         c.drawLine(0.26f, 0.88f, 0.74f, 0.88f, p)
     }
@@ -298,17 +326,19 @@ class WeatherIcon(private var code: Int = 0, private var day: Boolean = true) : 
 }
 
 /**
- * The weather on the home screen, in the layout of Apple's medium Weather widget: the city, the
- * temperature, the condition and the day's high and low, and the next six hours along the bottom,
- * on glass tinted with the colour of the sky. OK opens the six-day forecast.
+ * The weather on the home screen, in the layout of Apple's medium Weather widget on clear Liquid
+ * Glass: the place, the temperature in light figures, the condition and the day's high and low,
+ * and the next hours along the bottom, all in white with monochrome symbols, nothing tinted. OK
+ * opens the six-day forecast.
  */
 class WeatherWidget(ctx: Context, source: GlassSource, w: Int, h: Int) : WidgetCard(ctx, source, w, h) {
-    private val city = ctx.text(14f, weight = 600).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
-    private val temp = ctx.text(36f, weight = 300).apply { includeFontPadding = false; letterSpacing = -0.02f }
-    private val icon = WeatherIcon()
+    private val city = ctx.text(14f, Color.argb(235, 255, 255, 255), weight = 600).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+    private val arrow = ImageView(ctx).apply { setImageDrawable(LocationArrow()) }
+    private val temp = ctx.text(38f, weight = 200).apply { includeFontPadding = false; letterSpacing = -0.03f }
+    private val icon = WeatherIcon(mono = true)
     private val iconView = ImageView(ctx).apply { setImageDrawable(icon) }
     private val condition = ctx.text(13f, weight = 600).apply { gravity = Gravity.END; maxLines = 1 }
-    private val range = ctx.text(13f, Color.argb(220, 255, 255, 255), weight = 500).apply { gravity = Gravity.END }
+    private val range = ctx.text(13f, Color.argb(190, 255, 255, 255), weight = 500).apply { gravity = Gravity.END }
     private val hours = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
     private val empty = ctx.text(14f, Color.argb(200, 255, 255, 255), weight = 500).apply { text = "Finding the weather…"; gravity = Gravity.CENTER }
     var now: WeatherData.Now? = null
@@ -316,24 +346,31 @@ class WeatherWidget(ctx: Context, source: GlassSource, w: Int, h: Int) : WidgetC
 
     init {
         contentDescription = "Weather"
-        val p = dp(16)
+        val p = dp(18)
+        val place = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(city, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(5) })
+            addView(arrow, LinearLayout.LayoutParams(dp(9), dp(9)))
+        }
         val left = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            addView(city)
-            addView(temp, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(2) })
+            addView(place)
+            addView(temp, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(1) })
         }
-        body.addView(left, FrameLayout.LayoutParams(w / 2, -2).apply { leftMargin = p; topMargin = dp(12) })
+        body.addView(left, FrameLayout.LayoutParams(w / 2, -2).apply { leftMargin = p; topMargin = dp(13) })
         val right = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.END
-            addView(iconView, LinearLayout.LayoutParams(dp(26), dp(26)))
-            addView(condition, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(2) })
+            addView(iconView, LinearLayout.LayoutParams(dp(22), dp(22)))
+            addView(condition, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
             addView(range, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(1) })
         }
-        body.addView(right, FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.TOP).apply { rightMargin = p; topMargin = dp(12) })
-        body.addView(hours, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { leftMargin = p; rightMargin = p; bottomMargin = dp(10) })
+        body.addView(right, FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.TOP).apply { rightMargin = p; topMargin = dp(14) })
+        body.addView(hours, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { leftMargin = p - dp(4); rightMargin = p - dp(4); bottomMargin = dp(12) })
         body.addView(empty, FrameLayout.LayoutParams(-1, -1))
-        listOf(city, temp, condition, range).forEach { it.setShadowLayer(dp(4).toFloat(), 0f, dp(1).toFloat(), Color.argb(70, 0, 0, 0)) }
+        // Clear glass can sit on a bright wallpaper: a soft shadow keeps white type legible.
+        listOf(city, temp, condition, range).forEach { it.setShadowLayer(dp(6).toFloat(), 0f, dp(1).toFloat(), Color.argb(90, 0, 0, 0)) }
         show(null)
     }
 
@@ -341,10 +378,10 @@ class WeatherWidget(ctx: Context, source: GlassSource, w: Int, h: Int) : WidgetC
         now = n
         val has = n != null
         empty.visibility = if (has) View.GONE else View.VISIBLE
-        for (v in listOf(city, temp, iconView, condition, range, hours)) v.visibility = if (has) View.VISIBLE else View.INVISIBLE
-        glass.tint = if (n != null) WeatherData.sky(n.code, n.day) else WeatherData.sky(0, true)
+        for (v in listOf(city, arrow, temp, iconView, condition, range, hours)) v.visibility = if (has) View.VISIBLE else View.INVISIBLE
+        glass.tint = null
         if (n == null) return
-        city.text = "➤ ${n.city}"
+        city.text = n.city
         temp.text = "${n.temp}°"
         icon.set(n.code, n.day)
         condition.text = WeatherData.describe(n.code)
@@ -354,12 +391,35 @@ class WeatherWidget(ctx: Context, source: GlassSource, w: Int, h: Int) : WidgetC
             val col = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER_HORIZONTAL
-                addView(context.text(10f, Color.argb(210, 255, 255, 255), weight = 600).apply { text = hr.label; gravity = Gravity.CENTER })
-                addView(ImageView(context).apply { setImageDrawable(WeatherIcon(hr.code, hr.day)) }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { topMargin = dp(2) })
-                addView(context.text(12f, weight = 600).apply { text = "${hr.temp}°"; gravity = Gravity.CENTER }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(2) })
+                addView(context.text(11f, Color.argb(175, 255, 255, 255), weight = 600).apply { text = hr.label; gravity = Gravity.CENTER })
+                addView(ImageView(context).apply { setImageDrawable(WeatherIcon(hr.code, hr.day, mono = true)) }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { topMargin = dp(3) })
+                addView(context.text(13f, weight = 600).apply {
+                    text = "${hr.temp}°"; gravity = Gravity.CENTER
+                    setShadowLayer(dp(4).toFloat(), 0f, 0f, Color.argb(80, 0, 0, 0))
+                }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(2) })
             }
             hours.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
         }
+    }
+
+    /** The small navigation arrow Apple puts beside the current location. */
+    private class LocationArrow : Drawable() {
+        private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(235, 255, 255, 255) }
+        private val path = Path()
+        override fun draw(c: Canvas) {
+            val w = bounds.width().toFloat(); val h = bounds.height().toFloat()
+            path.reset()
+            path.moveTo(bounds.left + w, bounds.top.toFloat())
+            path.lineTo(bounds.left.toFloat(), bounds.top + h * 0.45f)
+            path.lineTo(bounds.left + w * 0.52f, bounds.top + h * 0.5f)
+            path.lineTo(bounds.left + w * 0.56f, bounds.top + h)
+            path.close()
+            c.drawPath(path, p)
+        }
+        override fun setAlpha(alpha: Int) {}
+        override fun setColorFilter(cf: ColorFilter?) {}
+        @Deprecated("Deprecated in Java")
+        override fun getOpacity() = PixelFormat.TRANSLUCENT
     }
 }
 
@@ -384,11 +444,12 @@ class WeatherSheet(private val host: FrameLayout, private val n: WeatherData.Now
     init {
         root.addView(ImageView(ctx).apply { scaleType = ImageView.ScaleType.FIT_XY; setImageBitmap(LiquidGlass.frostedSnapshot(host)) },
             FrameLayout.LayoutParams(-1, -1))
+        // Neutral, like the widget: the frosted screen dimmed, no sky colour.
         root.addView(View(ctx).apply {
-            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, WeatherData.sky(n.code, n.day).map { Color.argb(150, Color.red(it), Color.green(it), Color.blue(it)) }.toIntArray())
+            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(Color.argb(110, 0, 0, 0), Color.argb(170, 0, 0, 0)))
         }, FrameLayout.LayoutParams(-1, -1))
         card.addView(ctx.text(30f, weight = 500).apply { text = n.city; gravity = Gravity.CENTER })
-        card.addView(ctx.text(84f, weight = 200).apply { text = "${n.temp}°"; gravity = Gravity.CENTER; includeFontPadding = false })
+        card.addView(ctx.text(84f, weight = 150).apply { text = "${n.temp}°"; gravity = Gravity.CENTER; includeFontPadding = false })
         card.addView(ctx.text(19f, weight = 600).apply { text = WeatherData.describe(n.code); gravity = Gravity.CENTER })
         card.addView(ctx.text(17f, Color.argb(220, 255, 255, 255), weight = 500).apply {
             text = "H:${n.hi}°  L:${n.lo}°   ·   Feels like ${n.feels}°   ·   Humidity ${n.humidity}%   ·   Wind ${n.wind} ${n.windUnit}"
@@ -404,8 +465,8 @@ class WeatherSheet(private val host: FrameLayout, private val n: WeatherData.Now
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             addView(ctx.text(13f, Color.argb(220, 255, 255, 255), weight = 600).apply { text = hr.label })
-            addView(ImageView(ctx).apply { setImageDrawable(WeatherIcon(hr.code, hr.day)) }, LinearLayout.LayoutParams(ctx.dp(28), ctx.dp(28)).apply { topMargin = ctx.dp(6) })
-            if (hr.pop >= 20) addView(ctx.text(11f, Color.rgb(120, 206, 255), weight = 700).apply { text = "${hr.pop}%" })
+            addView(ImageView(ctx).apply { setImageDrawable(WeatherIcon(hr.code, hr.day, mono = true)) }, LinearLayout.LayoutParams(ctx.dp(26), ctx.dp(26)).apply { topMargin = ctx.dp(6) })
+            if (hr.pop >= 20) addView(ctx.text(11f, Color.argb(200, 255, 255, 255), weight = 700).apply { text = "${hr.pop}%" })
             addView(ctx.text(16f, weight = 600).apply { text = "${hr.temp}°" }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = ctx.dp(4) })
         }, LinearLayout.LayoutParams(0, -2, 1f))
         card.addView(hoursRow, LinearLayout.LayoutParams(panelW, -2).apply { topMargin = ctx.dp(22) })
@@ -421,8 +482,8 @@ class WeatherSheet(private val host: FrameLayout, private val n: WeatherData.Now
         for (d in n.days) {
             val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             row.addView(ctx.text(17f, weight = 600).apply { text = d.label }, LinearLayout.LayoutParams(ctx.dp(80), -2))
-            row.addView(ImageView(ctx).apply { setImageDrawable(WeatherIcon(d.code, true)) }, LinearLayout.LayoutParams(ctx.dp(28), ctx.dp(28)))
-            row.addView(ctx.text(12f, Color.rgb(120, 206, 255), weight = 700).apply { text = if (d.pop >= 20) "${d.pop}%" else ""; gravity = Gravity.CENTER },
+            row.addView(ImageView(ctx).apply { setImageDrawable(WeatherIcon(d.code, true, mono = true)) }, LinearLayout.LayoutParams(ctx.dp(26), ctx.dp(26)))
+            row.addView(ctx.text(12f, Color.argb(200, 255, 255, 255), weight = 700).apply { text = if (d.pop >= 20) "${d.pop}%" else ""; gravity = Gravity.CENTER },
                 LinearLayout.LayoutParams(ctx.dp(44), -2))
             row.addView(ctx.text(17f, Color.argb(170, 255, 255, 255), weight = 600).apply { text = "${d.lo}°"; gravity = Gravity.END },
                 LinearLayout.LayoutParams(ctx.dp(48), -2))

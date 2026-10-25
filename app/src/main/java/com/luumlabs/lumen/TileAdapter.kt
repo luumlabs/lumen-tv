@@ -4,7 +4,6 @@ import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Color
-import android.view.Choreographer
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -15,7 +14,6 @@ import android.widget.TextView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
 import java.util.concurrent.Executors
-import kotlin.math.sin
 
 /** One app on the grid: a rounded 16:9 tile of layered glass, with the name under it when focused. */
 class TileCell(ctx: Context, val tileW: Int, val tileH: Int) : FrameLayout(ctx) {
@@ -62,6 +60,15 @@ class TileCell(ctx: Context, val tileW: Int, val tileH: Int) : FrameLayout(ctx) 
         alpha = 0f
         visibility = INVISIBLE
     }
+    /** A narrow diagonal band of light that passes across the tile once it has settled. */
+    private val glintBand = View(ctx).apply {
+        background = android.graphics.drawable.GradientDrawable(
+            android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(Color.TRANSPARENT, Color.argb(34, 255, 255, 255), Color.argb(74, 255, 255, 255), Color.argb(34, 255, 255, 255), Color.TRANSPARENT))
+        rotation = 18f
+        alpha = 0f
+        visibility = INVISIBLE
+    }
     /** The glass edge: a hairline catching the light, brighter when focused. */
     private val rim = GlassRim(dp(CORNER).toFloat(), resources.displayMetrics.density * 1.1f).apply { strength = RIM_IDLE }
     private var focusedNow = false
@@ -81,6 +88,7 @@ class TileCell(ctx: Context, val tileW: Int, val tileH: Int) : FrameLayout(ctx) 
         val frontSize = (iconBox * (TileArt.FRONT_ICON + TileArt.FRONT_PAD * 2) / TileArt.FRONT_ICON).toInt()
         card.addView(front, LayoutParams(frontSize, frontSize, Gravity.CENTER))
         card.addView(sheen, LayoutParams(tileW, tileH))
+        card.addView(glintBand, LayoutParams((tileW * 0.42f).toInt(), (tileH * 1.7f).toInt(), Gravity.CENTER))
         card.foreground = rim
         card.clipRounded(dp(CORNER).toFloat())
         addView(card, LayoutParams(tileW, tileH))
@@ -98,85 +106,78 @@ class TileCell(ctx: Context, val tileW: Int, val tileH: Int) : FrameLayout(ctx) 
     }
 
     /**
-     * tvOS focus: the tile lifts towards the viewer on a spring (larger, a deep shadow under it),
-     * tilting in from the direction of travel while its layers slide back into register; with
-     * [tvos] a soft highlight glides across it as it settles, light catching a glass surface, and
-     * the settled tile keeps drifting gently, as it does under a thumb resting on the Siri Remote.
-     * Driven by [Tween], so it plays even with animations off.
+     * tvOS focus: the tile lifts towards the viewer on a firm spring over a deepening shadow,
+     * leaning in slightly from the direction of travel while its layers slide back into register
+     * (the icon twice as far as its background), all of it settling without a wobble. With [tvos],
+     * a soft highlight comes to rest on the glass and, once the tile has settled, a single glint of
+     * light passes across it. Nothing moves after that: a resting screen costs no frames. Driven by
+     * [Tween], so it plays even with animations off.
      */
     fun setFocusedLook(f: Boolean, fromDx: Int, fromDy: Int, showLabel: Boolean = true, tvos: Boolean = true) {
         focusedNow = f
         tvosNow = tvos
-        stopIdle()
+        cancelGlint()
         // A press still springing back would otherwise outlast this and leave the tile enlarged.
         pressTween.cancel()
         val s0 = card.scaleX
         val s1 = if (f) FOCUS_SCALE else 1f
         // Draw the lifted tile (and its shadow) above its neighbours.
         translationZ = if (f) 1f else 0f
-        card.cameraDistance = tileW * 14f
+        card.cameraDistance = tileW * 16f
         val tilt = f && tvos && (fromDx != 0 || fromDy != 0)
-        val rx0 = if (tilt) -fromDy * 7f else card.rotationX
-        val ry0 = if (tilt) fromDx * 7f else card.rotationY
-        val z1 = if (f) dp(4).toFloat() else 0f
-        val z0 = card.translationZ
+        val rx0 = if (tilt) -fromDy * TILT else card.rotationX
+        val ry0 = if (tilt) fromDx * TILT else card.rotationY
         val sh0 = shadow.alpha
-        val sh1 = if (f) 0.92f else 0f
+        val sh1 = if (f) 0.85f else 0f
         val shy0 = shadow.translationY
-        val shy1 = -shadowPad + if (f) dp(20).toFloat() else 0f
-        val shx0 = shadow.translationX
+        val shy1 = -shadowPad + if (f) dp(18).toFloat() else 0f
         val l0 = label.alpha
         val l1 = if (f && showLabel) 1f else 0f
         val ly0 = if (l0 == 0f && l1 > 0f) labelY + dp(8) else label.translationY
         label.isSelected = f && showLabel
         val g0 = sheen.alpha
-        val g1 = if (f && tvos) 1f else 0f
+        val g1 = if (f && tvos) 0.8f else 0f
         val rim0 = rim.strength
         val rim1 = if (f) 1f else RIM_IDLE
-        val lt0 = if (tilt) fromDx * 0.8f else rim.light
+        val lt0 = if (tilt) fromDx * 0.6f else rim.light
         if (f && tvos) {
             // The highlight enters from the side the focus came from and comes to rest near the top.
-            sheen.translationX = -fromDx * tileW * 0.45f
-            sheen.translationY = -tileH * 0.25f - fromDy * tileH * 0.3f
+            sheen.translationX = -fromDx * tileW * 0.4f
+            sheen.translationY = -tileH * 0.25f - fromDy * tileH * 0.25f
+            image.translationX = -fromDx * dp(4f).toFloat()
+            image.translationY = -fromDy * dp(3f).toFloat()
+            front.translationX = -fromDx * dp(9f).toFloat()
+            front.translationY = -fromDy * dp(7f).toFloat()
         }
         val gx0 = sheen.translationX
         val gy0 = sheen.translationY
-        // Parallax: the layers start displaced against the direction of travel, the icon twice as
-        // far as its background, and settle back, so the tile reads as depth instead of a flat card.
-        if (f && tvos) {
-            image.translationX = -fromDx * dp(5f).toFloat()
-            image.translationY = -fromDy * dp(4f).toFloat()
-            front.translationX = -fromDx * dp(11f).toFloat()
-            front.translationY = -fromDy * dp(8f).toFloat()
-        }
         val ix0 = image.translationX
         val iy0 = image.translationY
         val fx0 = front.translationX
         val fy0 = front.translationY
         sheen.visibility = if (f && tvos || g0 > 0f) VISIBLE else INVISIBLE
-        focusTween.start(if (f) 560 else 300, if (f) Motion.spring else Motion.soft, end = {
+        focusTween.start(if (f) 460 else 260, if (f) Motion.lift else Motion.soft, end = {
             if (!f) sheen.visibility = INVISIBLE
-            if (f && tvos && idleAllowed && jiggle == null) startIdle()
+            if (f && tvos) scheduleGlint()
         }) { p ->
-            val e = p.coerceAtMost(1f)
+            // Size rides the spring; everything else glides in on one curve, so nothing wobbles.
+            val e = Motion.emphasized.getInterpolation(p.coerceIn(0f, 1f))
             card.scaleX = lerp(s0, s1, p); card.scaleY = card.scaleX
-            card.rotationX = lerp(rx0, 0f, p)
-            card.rotationY = lerp(ry0, 0f, p)
-            card.translationZ = lerp(z0, z1, e)
+            card.rotationX = lerp(rx0, 0f, e)
+            card.rotationY = lerp(ry0, 0f, e)
             shadow.alpha = lerp(sh0, sh1, e)
             shadow.scaleX = card.scaleX * 1.02f; shadow.scaleY = shadow.scaleX
             shadow.translationY = lerp(shy0, shy1, e)
-            shadow.translationX = lerp(shx0, -shadowPad.toFloat(), e)
             label.alpha = lerp(l0, l1, e)
-            label.translationY = lerp(ly0, labelY, p)
+            label.translationY = lerp(ly0, labelY, e)
             sheen.alpha = lerp(g0, g1, e)
             rim.strength = lerp(rim0, rim1, e)
-            rim.light = lerp(lt0, 0f, p)
-            if (f) { sheen.translationX = lerp(gx0, 0f, p); sheen.translationY = lerp(gy0, -tileH * 0.25f, p) }
-            image.translationX = lerp(ix0, 0f, p)
-            image.translationY = lerp(iy0, 0f, p)
-            front.translationX = lerp(fx0, 0f, p)
-            front.translationY = lerp(fy0, 0f, p)
+            rim.light = lerp(lt0, 0f, e)
+            if (f) { sheen.translationX = lerp(gx0, 0f, e); sheen.translationY = lerp(gy0, -tileH * 0.25f, e) }
+            image.translationX = lerp(ix0, 0f, e)
+            image.translationY = lerp(iy0, 0f, e)
+            front.translationX = lerp(fx0, 0f, e)
+            front.translationY = lerp(fy0, 0f, e)
         }
     }
 
@@ -188,84 +189,49 @@ class TileCell(ctx: Context, val tileW: Int, val tileH: Int) : FrameLayout(ctx) 
         if (pressed == was || !isFocused) return
         val s0 = card.scaleX
         val s1 = if (pressed) FOCUS_SCALE * 0.95f else FOCUS_SCALE
-        pressTween.start(if (pressed) 120 else 420, if (pressed) Motion.ease else Motion.spring) { p ->
+        pressTween.start(if (pressed) 110 else 380, if (pressed) Motion.ease else Motion.lift) { p ->
             card.scaleX = lerp(s0, s1, p); card.scaleY = card.scaleX
             shadow.scaleX = card.scaleX * 1.02f; shadow.scaleY = shadow.scaleX
         }
     }
 
-    // ---- the drift of a settled, focused tile -------------------------------------------------
+    // ---- the glint across a settled, focused tile ----------------------------------------------
 
-    private var idleOn = false
-    private var idleT0 = -1L
-    private var ampT0 = -1L
-    private val idleFrame = object : Choreographer.FrameCallback {
-        override fun doFrame(now: Long) {
-            if (!idleOn) return
-            if (idleT0 < 0) idleT0 = now
-            val bumping = (card.getTag(R.id.motion_bump) as? Tween)?.running == true
-            // While the edge bump shakes the card, wait, then fade the drift back in from nothing.
-            if (bumping || pressTween.running || ampT0 < 0) ampT0 = now
-            if (!bumping) {
-                val t = (now - idleT0) / 1e9f
-                val a = ((now - ampT0) / 1e9f / 1.6f).coerceIn(0f, 1f).let { it * it * (3 - 2 * it) }
-                val nx = sin(t * TWO_PI / 7.4f + 1.1f) * a
-                val ny = sin(t * TWO_PI / 5.6f) * a
-                card.rotationY = nx * 2.2f
-                card.rotationX = -ny * 1.5f
-                image.translationX = -nx * dp(3f)
-                image.translationY = -ny * dp(2f)
-                front.translationX = -nx * dp(7f)
-                front.translationY = -ny * dp(5f)
-                sheen.translationX = nx * tileW * 0.12f
-                sheen.translationY = -tileH * 0.25f + ny * tileH * 0.08f
-                rim.light = nx * 0.7f
-                shadow.translationX = -shadowPad - nx * dp(3f)
-            }
-            Choreographer.getInstance().postFrameCallback(this)
+    private val glintTween = Tween()
+    private val glintLater = Runnable { glint() }
+
+    private fun scheduleGlint() {
+        removeCallbacks(glintLater)
+        if (idleAllowed && focusedNow && tvosNow && jiggle == null) postDelayed(glintLater, 420)
+    }
+
+    private fun cancelGlint() {
+        removeCallbacks(glintLater)
+        glintTween.cancel()
+        glintBand.visibility = INVISIBLE
+    }
+
+    /** One band of light sweeping across the glass, left to right, once. */
+    private fun glint() {
+        if (!focusedNow || !idleAllowed) return
+        glintBand.visibility = VISIBLE
+        val from = -tileW * 0.85f
+        val to = tileW * 0.85f
+        glintTween.start(1100, android.view.animation.LinearInterpolator(), end = { glintBand.visibility = INVISIBLE }) { p ->
+            glintBand.translationX = lerp(from, to, Motion.emphasized.getInterpolation(p))
+            // In and out softly, brightest as it crosses the middle.
+            glintBand.alpha = kotlin.math.sin(p * Math.PI).toFloat()
         }
     }
 
-    private fun startIdle() {
-        if (idleOn) return
-        idleOn = true
-        idleT0 = -1L
-        ampT0 = -1L
-        Choreographer.getInstance().postFrameCallback(idleFrame)
-    }
+    /** The screen is hidden, or left alone: no glint now. */
+    fun settle() = cancelGlint()
 
-    private fun stopIdle() {
-        if (!idleOn) return
-        idleOn = false
-        Choreographer.getInstance().removeFrameCallback(idleFrame)
-    }
-
-    /** Stops the drift and lets the tile come to rest (the screen is left alone, or hidden). */
-    fun settle() {
-        if (!idleOn) return
-        stopIdle()
-        if (focusTween.running) return
-        val rx0 = card.rotationX; val ry0 = card.rotationY
-        val ix0 = image.translationX; val iy0 = image.translationY
-        val fx0 = front.translationX; val fy0 = front.translationY
-        val gx0 = sheen.translationX; val gy0 = sheen.translationY
-        val lt0 = rim.light; val shx0 = shadow.translationX
-        focusTween.start(700, Motion.soft) { p ->
-            card.rotationX = lerp(rx0, 0f, p); card.rotationY = lerp(ry0, 0f, p)
-            image.translationX = lerp(ix0, 0f, p); image.translationY = lerp(iy0, 0f, p)
-            front.translationX = lerp(fx0, 0f, p); front.translationY = lerp(fy0, 0f, p)
-            sheen.translationX = lerp(gx0, 0f, p); sheen.translationY = lerp(gy0, -tileH * 0.25f, p)
-            rim.light = lerp(lt0, 0f, p); shadow.translationX = lerp(shx0, -shadowPad.toFloat(), p)
-        }
-    }
-
-    /** Starts the drift again on the focused tile (a key was pressed, or the screen came back). */
-    fun wake() {
-        if (focusedNow && tvosNow && idleAllowed && jiggle == null && !focusTween.running) startIdle()
-    }
+    /** The focused tile catches the light again (a key was pressed, or the screen came back). */
+    fun wake() { if (focusedNow && !focusTween.running && !glintTween.running) scheduleGlint() }
 
     override fun onDetachedFromWindow() {
-        stopIdle()
+        cancelGlint()
         super.onDetachedFromWindow()
     }
 
@@ -274,10 +240,11 @@ class TileCell(ctx: Context, val tileW: Int, val tileH: Int) : FrameLayout(ctx) 
         const val FOCUS_SCALE = 1.14f
         const val CORNER = 12
         private const val RIM_IDLE = 0.42f
-        private const val TWO_PI = (Math.PI * 2).toFloat()
+        /** How far a tile leans in from the direction of travel, in degrees. */
+        private const val TILT = 4f
         private var shared: android.graphics.Bitmap? = null
 
-        /** Whether settled tiles drift; off while the home screen is hidden or left alone. */
+        /** Whether a settled tile may catch a glint; off while the home screen is hidden or left alone. */
         @JvmStatic var idleAllowed = true
 
         /** One shadow bitmap serves every tile. */
@@ -290,7 +257,7 @@ class TileCell(ctx: Context, val tileW: Int, val tileH: Int) : FrameLayout(ctx) 
         jiggle = null
         card.rotation = 0f
         if (on) {
-            settle()
+            cancelGlint()
             jiggle = ObjectAnimator.ofFloat(card, "rotation", -1.4f, 1.4f).apply {
                 duration = 130
                 repeatMode = ValueAnimator.REVERSE

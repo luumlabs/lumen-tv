@@ -36,6 +36,8 @@ object Motion {
     val ease = DecelerateInterpolator(2f)
     /** Focus and lift: a quick spring that overshoots by a hair (about 3 %) and settles, as tvOS does. */
     val spring = Spring(0.76f)
+    /** Lifting a focused item: a firm spring whose overshoot (about 1 %) reads as weight, not bounce. */
+    val lift = Spring(0.84f)
     /** A spring with no visible overshoot, for things that should glide rather than bounce. */
     val soft = Spring(0.95f)
     /** Scrolling and page changes: fast out of the gate, a long gentle landing. */

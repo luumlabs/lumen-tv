@@ -204,6 +204,28 @@ class GlassPanel(private val owner: View, private val radius: Float, private val
     var lit = 0f
         set(v) { if (field != v) { field = v; invalidateSelf() } }
 
+    /**
+     * Clear Liquid Glass baked over what is behind this pane ([LiquidGlass.bake]), refracting at the
+     * rim; drawn instead of the live approximation once the home screen has made it.
+     */
+    var baked: Bitmap? = null
+        set(v) { field = v; dim = v?.let(::dimFor) ?: 0; invalidateSelf() }
+
+    /** A dark veil under the content where the glass sits on something bright, so white text reads. */
+    private var dim = 0
+
+    private fun dimFor(b: Bitmap): Int {
+        val small = Bitmap.createScaledBitmap(b, 12, 6, true)
+        var sum = 0f
+        for (y in 0 until 6) for (x in 0 until 12) {
+            val c = small.getPixel(x, y)
+            sum += (Color.red(c) * 0.3f + Color.green(c) * 0.59f + Color.blue(c) * 0.11f) / 255f
+        }
+        if (small !== b) small.recycle()
+        val luma = sum / 72f
+        return (((luma - 0.42f) / 0.4f).coerceIn(0f, 1f) * 120).toInt()
+    }
+
     /** Follows the source's pictures while attached. */
     fun attach() { if (this !in source.panels) source.panels += this }
     fun detach() { source.panels -= this }
@@ -231,6 +253,7 @@ class GlassPanel(private val owner: View, private val radius: Float, private val
         rect.set(bounds)
         val r = radius.coerceAtMost(minOf(rect.width(), rect.height()) / 2)
         path.reset(); path.addRoundRect(rect, r, r, Path.Direction.CW)
+        baked?.let { drawBaked(c, it, r); return }
         val save = c.save()
         c.clipPath(path)
         val screen = owner.rootView
@@ -284,6 +307,29 @@ class GlassPanel(private val owner: View, private val radius: Float, private val
         paint.shader = null
         paint.alpha = 255
         paint.style = Paint.Style.FILL
+    }
+
+    /** The baked glass, a veil where it is bright, and on focus a brighter body and rim. */
+    private fun drawBaked(c: Canvas, b: Bitmap, r: Float) {
+        val save = c.save()
+        c.clipPath(path)
+        paint.shader = null
+        paint.alpha = 255
+        c.drawBitmap(b, null, rect, paint)
+        if (dim > 0) { paint.color = Color.argb(dim, 0, 0, 0); c.drawRect(rect, paint) }
+        if (lit > 0f) { paint.color = Color.argb((34 * lit).toInt(), 255, 255, 255); c.drawRect(rect, paint) }
+        c.restoreToCount(save)
+        if (lit > 0f) {
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = owner.resources.displayMetrics.density * 1.4f
+            paint.shader = rim
+            paint.alpha = (230 * lit).toInt()
+            rect.inset(paint.strokeWidth / 2, paint.strokeWidth / 2)
+            c.drawRoundRect(rect, r, r, paint)
+            paint.shader = null
+            paint.alpha = 255
+            paint.style = Paint.Style.FILL
+        }
     }
 
     override fun getOutline(outline: Outline) = outline.setRoundRect(bounds, radius.coerceAtMost(minOf(bounds.width(), bounds.height()) / 2f))
