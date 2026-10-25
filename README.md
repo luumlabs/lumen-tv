@@ -46,7 +46,8 @@ by lesnolie. See [Credits](#credits).
 **Widgets**
 
 - **Weather**: the temperature, the conditions and the next six hours; press OK for a six-day
-  forecast. Data by [Open-Meteo](https://open-meteo.com).
+  forecast. It finds the TV by its internet address, or search for your city under *Settings →
+  Widgets → Location*. Data by [Open-Meteo](https://open-meteo.com).
 - **Top 10**: this week's most popular movies and shows in your country, and the best reviewed of
   them, with scores from IMDb, Rotten Tomatoes, TMDB and JustWatch, the cast and where to watch.
   Press OK on a title to choose where to open it: the installed streaming apps that carry it, Nuvio
@@ -165,7 +166,7 @@ adb shell am broadcast -a com.luumlabs.lumen.CONFIG -n com.luumlabs.lumen/.Confi
 |---|---|
 | `weather`, `charts` | `true` / `false`: show the widgets |
 | `weather_unit` | `auto`, `c`, `f` |
-| `weather_city` | a city name; empty to locate the TV by its IP address |
+| `weather_city` | a city name, optionally followed by its region or country (`"Valencia, Venezuela"`); empty to locate the TV by its IP address |
 | `charts_country` | a two-letter country code; empty for automatic |
 | `app_tint` | `true` / `false`: background colour follows the focused app |
 | `clock_style` | `corner`, `large`, `off` |
@@ -210,7 +211,7 @@ Lumen has no analytics and no account. It connects to the internet only for the 
 | Feature | Service |
 |---|---|
 | Wallpapers | The selected source: Bing, curated image feeds, or your own links |
-| Weather widget | Open-Meteo; the TV's approximate location from get.geojs.io, ipwho.is or ipapi.co, unless a city is set |
+| Weather widget | Open-Meteo; the TV's approximate location from ipinfo.io, ipwho.is, ipapi.co or get.geojs.io, unless a city is chosen |
 | Top 10 widget | JustWatch |
 | Top Shelf | The public web API of the supported app |
 | Aerial screensaver | Apple's aerial film servers |

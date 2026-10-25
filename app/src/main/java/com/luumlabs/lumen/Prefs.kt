@@ -173,6 +173,11 @@ class Prefs(ctx: Context) {
         get() = sp.getString("weather_city", "")!!
         set(v) = sp.edit().putString("weather_city", v.trim()).apply()
 
+    /** The city picked from the search in Settings (Geo.choose), as JSON; used while [weatherCity] is its label. */
+    var weatherPlace: String
+        get() = sp.getString("weather_place", "")!!
+        set(v) = sp.edit().putString("weather_place", v).apply()
+
     /** The Top 10 widget above the dock (Charts.kt). */
     var widgetCharts: Boolean
         get() = sp.getBoolean("widget_charts", true)

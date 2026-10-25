@@ -9,7 +9,7 @@
 - **Aerial** (https://github.com/pengchujin/aerial-tv) — MIT License, Copyright (c) 2026 pengchujin. Tigris ports its home guard and revival (`Guard.kt`), Xiaomi device details (`tv/XiaomiAdapter.kt`, `AppRepo.kt`), the phone page (`PhoneServer.kt`, `assets/web/index.html`, restyled), `tools/tcast-push.py`, and ships its aerial film catalogue `app/src/main/assets/aerials.json` (addresses and place names from Apple's public tvOS aerial resources; the films themselves stream from Apple and are not included).
 - **Open-Meteo** (https://open-meteo.com) — the weather widget's forecasts and its city lookup. Weather data by Open-Meteo.com, licensed under CC BY 4.0; attributed in Settings → Widgets.
 - **JustWatch** (https://www.justwatch.com) — the Top 10 widget reads popularity, scores, cast, artwork and streaming offers from JustWatch's public web API at run time; nothing is bundled. Attributed on the Top 10 screen. IMDb, Rotten Tomatoes, TMDB and the streaming services named there are their owners' trademarks.
-- **IP geolocation** (get.geojs.io, ipwho.is, ipapi.co) — asked in turn, at most twice a day, for the TV's approximate location when no city is set.
+- **IP geolocation** (ipinfo.io, ipwho.is, ipapi.co, get.geojs.io) — asked in turn, at most twice a day, for the TV's approximate location when no city is chosen.
 - **Apple Root CA** (`app/src/main/res/raw/apple_root_ca.pem`) — Apple's public root certificate, trusted only for `sylvan.apple.com`, which serves the aerial films.
 
 

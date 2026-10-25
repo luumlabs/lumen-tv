@@ -3,6 +3,7 @@ package com.luumlabs.lumen
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import java.util.TimeZone
 
 class WidgetDataTest {
     private fun title(imdb: Double? = null, votes: Int? = null, tmdb: Double? = null, tomato: Int? = null) = Charts.Title(
@@ -35,5 +36,19 @@ class WidgetDataTest {
         assertEquals("Partly Cloudy", WeatherData.describe(2))
         assertEquals("Heavy Rain", WeatherData.describe(65))
         assertEquals("Thunderstorms", WeatherData.describe(95))
+    }
+
+    @Test fun ipPlacesAreCheckedAgainstTheTvClock() {
+        val madrid = TimeZone.getTimeZone("Europe/Madrid")
+        assertEquals(true, Geo.sameClock("Europe/Paris", madrid))
+        // A VPN exit or a provider's hub in another country.
+        assertEquals(false, Geo.sameClock("America/Caracas", madrid))
+        assertEquals(false, Geo.sameClock("America/New_York", TimeZone.getTimeZone("America/Bogota")))
+        // A neighbour's zone on the same time all year is no reason for doubt.
+        assertEquals(true, Geo.sameClock("America/Lima", TimeZone.getTimeZone("America/Bogota")))
+        // Unknown: no zone given, an unknown one, or the TV on plain UTC.
+        assertNull(Geo.sameClock("", madrid))
+        assertNull(Geo.sameClock("Mars/Olympus", madrid))
+        assertNull(Geo.sameClock("Europe/Paris", TimeZone.getTimeZone("UTC")))
     }
 }

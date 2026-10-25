@@ -439,6 +439,7 @@ class WeatherSheet(private val host: FrameLayout, private val n: WeatherData.Now
     }
     private val card = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
     private var onDismiss: (() -> Unit)? = null
+    private var onChangePlace: (() -> Unit)? = null
     private var leaving = false
 
     init {
@@ -493,10 +494,22 @@ class WeatherSheet(private val host: FrameLayout, private val n: WeatherData.Now
             daysBox.addView(row, LinearLayout.LayoutParams(-1, ctx.dp(42)))
         }
         card.addView(daysBox, LinearLayout.LayoutParams(panelW, -2).apply { topMargin = ctx.dp(14) })
+        card.addView(ctx.text(14f, Color.argb(150, 255, 255, 255), weight = 500).apply {
+            text = "Not your city? Press OK to change the location."
+            gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = ctx.dp(16) })
         root.addView(card, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+        root.setOnKeyListener { _, code, e ->
+            val ok = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER || code == KeyEvent.KEYCODE_NUMPAD_ENTER
+            if (ok && e.action == KeyEvent.ACTION_UP && !leaving) onChangePlace?.invoke()
+            ok
+        }
     }
 
     fun onDismiss(f: () -> Unit) = apply { onDismiss = f }
+
+    /** OK on the sheet: the home screen opens the location settings. */
+    fun onChangePlace(f: () -> Unit) = apply { onChangePlace = f }
 
     fun show(): WeatherSheet {
         host.addView(root, FrameLayout.LayoutParams(-1, -1))

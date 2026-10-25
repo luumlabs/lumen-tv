@@ -80,6 +80,13 @@ class SettingsActivity : Activity() {
     private lateinit var scroll: ScrollView
     private var bundledBackdrop = false
     private var page = Page.MAIN
+    /** The page this screen opened on: Back there leaves Settings. */
+    private var startPage = Page.MAIN
+    /** The last city search on the location page, and what it found (null: none yet, or it failed). */
+    private var placeQuery = ""
+    private var placeResults: List<Geo.Place>? = null
+    private var placeSearching = false
+    private var placeFailed = false
     /** Which row opened each page, focused again on the way back to its parent. */
     private val openers = HashMap<Page, Int>()
     /** Every row's value line and how to read it, so the page can catch up after another screen. */
@@ -98,6 +105,7 @@ class SettingsActivity : Activity() {
         KEEP("Keep When Freeing Memory", MEMORY),
         HIDDEN("Hidden Apps", APPS),
         REMOVED("Removed Preinstalled Apps", APPS),
+        LOCATION("Weather Location", WIDGETS),
     }
 
     /** A ScrollView that brings the focused row to just above the middle, as tvOS lists do. */
@@ -168,7 +176,9 @@ class SettingsActivity : Activity() {
         body.addView(scroll, LinearLayout.LayoutParams(0, -1, 1.05f).apply { marginEnd = dp(52) })
         root.addView(body, FrameLayout.LayoutParams(-1, -1).apply { topMargin = dp(84) })
         setContentView(root)
-        show(Page.MAIN, animate = false)
+        // The weather sheet on the home screen opens the location page directly; Back then returns home.
+        if (intent.getStringExtra("page") == "location") startPage = Page.LOCATION
+        show(startPage, animate = false)
     }
 
     override fun onResume() {
@@ -190,6 +200,7 @@ class SettingsActivity : Activity() {
 
     /** Builds [p]; [dir] 1 slides it in from the right (deeper), -1 from the left (back). */
     private fun show(p: Page, focusIndex: Int = 0, dir: Int = 1, animate: Boolean = true) {
+        if (p != Page.LOCATION) placeResults = null
         page = p
         list.removeAllViews()
         values.clear()
@@ -211,6 +222,7 @@ class SettingsActivity : Activity() {
                 prefs.hidden = if (on) prefs.hidden + pkg else prefs.hidden - pkg
             }
             Page.REMOVED -> removedApps()
+            Page.LOCATION -> location()
         }
         scroll.scrollTo(0, 0)
         if (animate) {
@@ -365,17 +377,10 @@ class SettingsActivity : Activity() {
         row("Temperature", "Celsius or Fahrenheit. “Auto” follows the TV's region.", {
             when (prefs.weatherUnit) { "c" -> "Celsius"; "f" -> "Fahrenheit"; else -> "Auto (${if (WeatherData.fahrenheit(this)) "°F" else "°C"})" }
         }) { prefs.weatherUnit = when (prefs.weatherUnit) { Prefs.AUTO -> "c"; "c" -> "f"; else -> Prefs.AUTO } }
-        row("Location", "Found from the TV's internet address; press OK to look again. To name a city instead, run: adb shell am broadcast -a com.luumlabs.lumen.CONFIG -n com.luumlabs.lumen/.ConfigReceiver --es weather_city \"Madrid\"", {
-            prefs.weatherCity.ifEmpty { Geo.cachedCity(this)?.let { "Automatic ($it)" } ?: "Automatic" }
-        }) { v ->
-            v.text = "Locating…"
-            io.execute {
-                Geo.forget(applicationContext)
-                val place = Geo.place(applicationContext)
-                if (place != null) WeatherData.load(applicationContext, force = true)
-                runOnUiThread { v.text = place?.let { prefs.weatherCity.ifEmpty { "Automatic (${it.city})" } } ?: "Can't tell where the TV is" }
-            }
-        }
+        row("Location", "Where the weather is for. Automatic finds the TV from its internet address; if that picks the wrong city, search for yours here.", {
+            if (prefs.weatherCity.isEmpty()) Geo.cachedCity(this)?.let { "Automatic ($it)" } ?: "Automatic"
+            else Geo.chosen(prefs)?.takeIf { it.label == prefs.weatherCity }?.city ?: prefs.weatherCity
+        }, chevron = true) { open(Page.LOCATION) }
         section("Top 10")
         row("Top 10 widget", "This week's most popular movies and shows, and the best reviewed of them, with scores from IMDb, Rotten Tomatoes, TMDB and JustWatch, the cast and where to watch. Press OK on it to browse. Data by JustWatch.",
             { onOff(prefs.widgetCharts) }) { prefs.widgetCharts = !prefs.widgetCharts }
@@ -562,6 +567,95 @@ class SettingsActivity : Activity() {
         }
     }
 
+    /**
+     * Where the weather is for: automatic (the TV's internet address, checked against its time
+     * zone), or a city found by name and picked from the matches, which keeps its coordinates.
+     */
+    private fun location() {
+        val explain = "Automatic finds the TV from its internet address and checks it against the TV's time zone. " +
+            "If it picks the wrong city, search for yours: add the region or country after a comma to narrow it down, as in “Valencia, Venezuela”."
+        about.text = explain
+        val named = prefs.weatherCity
+        val chosen = Geo.chosen(prefs)?.takeIf { it.label == named }
+        section("Location")
+        row("Automatic", explain, { if (named.isEmpty()) "✓  " + (Geo.cachedCity(this) ?: "Locating…") else "" }) { v ->
+            v.text = "Locating…"
+            io.execute {
+                Geo.automatic(applicationContext)
+                val place = Geo.place(applicationContext)
+                if (place != null) WeatherData.load(applicationContext, force = true)
+                runOnUiThread {
+                    if (page == Page.LOCATION) show(Page.LOCATION, 1, animate = false)
+                    if (place == null) Toast.makeText(this, "Can't tell where the TV is. Search for your city instead.", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        if (named.isNotEmpty()) row(chosen?.city ?: named, explain, { "✓  " + (chosen?.area ?: "Set from a computer") }) {}
+        row("Search for a city", explain, { if (placeSearching) "Searching…" else "" }, chevron = true) { askCity() }
+        val found = placeResults ?: return
+        section("Results for “$placeQuery”")
+        if (found.isEmpty()) {
+            row(if (placeFailed) "Couldn't search right now" else "No places found", explain, { "Search again" }) { askCity() }
+        }
+        for (p in found) {
+            row(p.city, explain, { p.area }) {
+                Geo.choose(applicationContext, p)
+                io.execute { WeatherData.load(applicationContext, force = true) }
+                if (startPage == Page.LOCATION) finish() else show(Page.WIDGETS, openers[Page.LOCATION] ?: 0, dir = -1)
+            }
+        }
+    }
+
+    /** Asks for a city's name with the TV's keyboard, then lists the places it may mean. */
+    private fun askCity() {
+        val input = android.widget.EditText(this).apply {
+            setSingleLine()
+            hint = "City or town"
+            setText(placeQuery)
+            selectAll()
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_WORDS
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            filters = arrayOf(android.text.InputFilter.LengthFilter(60))
+        }
+        val dialog = android.app.AlertDialog.Builder(this).setTitle("Search for a city").setView(input)
+            .setPositiveButton("Search", null).setNegativeButton("Cancel", null).create()
+        fun go() {
+            val q = input.text.toString().trim()
+            if (q.length < 2) { input.error = "Enter at least two letters"; return }
+            dialog.dismiss()
+            searchCity(q)
+        }
+        input.setOnEditorActionListener { _, action, _ ->
+            if (action == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH || action == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) { go(); true } else false
+        }
+        dialog.setOnShowListener {
+            input.requestFocus()
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener { go() }
+        }
+        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+        dialog.show()
+    }
+
+    private fun searchCity(q: String) {
+        placeQuery = q
+        placeSearching = true
+        placeResults = null
+        // Focus stays on the search row (after the section title, Automatic and any chosen city).
+        val searchRow = if (prefs.weatherCity.isNotEmpty()) 3 else 2
+        show(Page.LOCATION, searchRow, animate = false)
+        io.execute {
+            val found = runCatching { Geo.search(q) }
+            runOnUiThread {
+                placeSearching = false
+                if (page != Page.LOCATION || isFinishing) return@runOnUiThread
+                placeFailed = found.isFailure
+                placeResults = found.getOrNull() ?: emptyList()
+                // Onto the first match, below the search row and the results' title.
+                show(Page.LOCATION, searchRow + 2, animate = false)
+            }
+        }
+    }
+
     /** Preinstalled apps deleted from the long-press menu; selecting one reinstalls it from the system partition. */
     private fun removedApps() {
         val explain = "Pick an app to reinstall it from the system partition."
@@ -699,6 +793,10 @@ class SettingsActivity : Activity() {
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         val parent = page.parent
+        if (keyCode == KeyEvent.KEYCODE_BACK && page == startPage && startPage != Page.MAIN) {
+            finish()
+            return true
+        }
         if (keyCode == KeyEvent.KEYCODE_BACK && parent != null) {
             show(parent, openers[page] ?: 0, dir = -1)
             return true

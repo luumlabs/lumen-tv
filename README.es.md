@@ -46,7 +46,8 @@ La interfaz está en inglés. Lumen TV es un fork independiente de
 **Widgets**
 
 - **Tiempo**: temperatura, estado del cielo y las próximas seis horas; con OK, el pronóstico de seis
-  días. Datos de [Open-Meteo](https://open-meteo.com).
+  días. Ubica el televisor por su dirección de internet, o busca tu ciudad en *Settings → Widgets →
+  Location*. Datos de [Open-Meteo](https://open-meteo.com).
 - **Top 10**: las películas y series más populares de la semana en tu país, y las mejor valoradas,
   con puntuaciones de IMDb, Rotten Tomatoes, TMDB y JustWatch, el reparto y dónde verlas. Pulsa
   OK en un título para elegir dónde abrirlo: las apps de streaming instaladas que lo tienen, Nuvio o
@@ -167,7 +168,7 @@ adb shell am broadcast -a com.luumlabs.lumen.CONFIG -n com.luumlabs.lumen/.Confi
 |---|---|
 | `weather`, `charts` | `true` / `false`: mostrar los widgets |
 | `weather_unit` | `auto`, `c`, `f` |
-| `weather_city` | nombre de una ciudad; vacío para ubicar el televisor por su IP |
+| `weather_city` | nombre de una ciudad, opcionalmente seguido de su región o país (`"Valencia, Venezuela"`); vacío para ubicar el televisor por su IP |
 | `charts_country` | código de país de dos letras; vacío para automático |
 | `app_tint` | `true` / `false`: el color del fondo sigue a la app enfocada |
 | `clock_style` | `corner`, `large`, `off` |
@@ -213,7 +214,7 @@ Lumen no tiene analíticas ni cuentas. Solo se conecta a internet para las funci
 | Función | Servicio |
 |---|---|
 | Fondos | La fuente elegida: Bing, colecciones de imágenes o tus propios enlaces |
-| Widget del tiempo | Open-Meteo; la ubicación aproximada del televisor, de get.geojs.io, ipwho.is o ipapi.co, salvo que fijes una ciudad |
+| Widget del tiempo | Open-Meteo; la ubicación aproximada del televisor, de ipinfo.io, ipwho.is, ipapi.co o get.geojs.io, salvo que elijas una ciudad |
 | Widget Top 10 | JustWatch |
 | Top Shelf | La API web pública de la app compatible |
 | Salvapantallas aéreo | Los servidores de películas aéreas de Apple |

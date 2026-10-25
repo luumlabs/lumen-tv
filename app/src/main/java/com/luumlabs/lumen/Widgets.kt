@@ -90,9 +90,20 @@ object Net {
  * Kept for half a day.
  */
 object Geo {
-    data class Place(val lat: Double, val lon: Double, val city: String, val country: String)
+    /**
+     * A place: its two-letter [country] code, the [area] around the city for telling namesakes
+     * apart ("Comunidad Valenciana, Spain") and its time [zone] ("Europe/Madrid"), when known.
+     */
+    data class Place(
+        val lat: Double, val lon: Double, val city: String, val country: String,
+        val area: String = "", val zone: String = "",
+    ) {
+        val label: String get() = if (area.isEmpty()) city else "$city, $area"
+    }
 
     private const val TTL = 12 * 60 * 60_000L
+    /** Bumped when the way the TV is placed improves: places found the older way are looked up again. */
+    private const val VERSION = 2
     /** The last place found, when, and for which city setting ("" for automatic). */
     @Volatile private var memo: Triple<Long, Place, String>? = null
     @Volatile private var failedAt = 0L
@@ -101,10 +112,12 @@ object Geo {
     fun place(ctx: Context): Place? {
         val prefs = Prefs(ctx)
         val named = prefs.weatherCity.trim()
+        // A city picked from the search in Settings: its own coordinates, never looked up again by name.
+        chosen(prefs)?.let { if (it.label == named) return it }
         memo?.let { (at, p, forName) -> if (System.currentTimeMillis() - at < TTL && forName == named) return p }
         val sp = ctx.getSharedPreferences("geo", Context.MODE_PRIVATE)
         val cached = sp.getString("place", null)?.let { runCatching { decode(JSONObject(it)) }.getOrNull() }
-        val fresh = System.currentTimeMillis() - sp.getLong("at", 0) < TTL
+        val fresh = System.currentTimeMillis() - sp.getLong("at", 0) < TTL && sp.getInt("v", 1) == VERSION
         if (cached != null && fresh && sp.getString("named", "") == named) return cached.also { memo = Triple(sp.getLong("at", 0), it, named) }
         // Offline, the IP services are not asked again every minute.
         if (System.currentTimeMillis() - failedAt < 10 * 60_000L) return cached
@@ -112,39 +125,140 @@ object Geo {
         if (found == null) failedAt = System.currentTimeMillis()
         if (found != null) {
             memo = Triple(System.currentTimeMillis(), found, named)
-            sp.edit().putString("place", encode(found).toString()).putLong("at", System.currentTimeMillis()).putString("named", named).apply()
+            sp.edit().putString("place", encode(found).toString()).putLong("at", System.currentTimeMillis())
+                .putString("named", named).putInt("v", VERSION).apply()
             return found
         }
         return cached
     }
 
-    private fun geocode(name: String): Place? {
-        val q = java.net.URLEncoder.encode(name, "UTF-8")
-        val r = JSONObject(Net.get("https://geocoding-api.open-meteo.com/v1/search?name=$q&count=1&language=en&format=json").decodeToString())
-        val o = r.optJSONArray("results")?.optJSONObject(0) ?: return null
-        return Place(o.getDouble("latitude"), o.getDouble("longitude"), o.optString("name", name), o.optString("country_code", ""))
+    /**
+     * Blocking. The places called [query], most populous first, named in the TV's language. A
+     * qualifier after a comma narrows them by region or country: "Valencia, Venezuela",
+     * "Springfield, IL", "Córdoba, AR".
+     */
+    fun search(query: String): List<Place> {
+        val parts = query.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        if (parts.isEmpty()) return emptyList()
+        val lang = java.util.Locale.getDefault().language.takeIf { it.length == 2 } ?: "en"
+        val q = java.net.URLEncoder.encode(parts[0], "UTF-8")
+        val r = JSONObject(Net.get("https://geocoding-api.open-meteo.com/v1/search?name=$q&count=20&language=$lang&format=json").decodeToString())
+        return parseSearch(r, parts.drop(1))
     }
 
-    /** A few free, keyless services, tried in turn. */
+    /** Reads an Open-Meteo geocoding answer, keeping the places that match every qualifier. */
+    internal fun parseSearch(r: JSONObject, qualifiers: List<String>): List<Place> {
+        val arr = r.optJSONArray("results") ?: return emptyList()
+        val wanted = qualifiers.map(::fold).filter { it.isNotEmpty() }
+        val out = ArrayList<Place>()
+        for (k in 0 until arr.length()) {
+            val o = arr.optJSONObject(k) ?: continue
+            if (!o.has("latitude") || !o.has("longitude")) continue
+            val code = o.optString("country_code")
+            val names = listOf(o.optString("admin1"), o.optString("admin2"), o.optString("country"), code).map(::fold)
+            if (!wanted.all { w -> names.any { it == w || (w.length > 2 && it.contains(w)) } }) continue
+            val city = o.optString("name")
+            if (city.isEmpty()) continue
+            val area = listOf(o.optString("admin1"), o.optString("country")).filter { it.isNotEmpty() && it != city }.distinct().joinToString(", ")
+            out += Place(o.getDouble("latitude"), o.getDouble("longitude"), city, code, area, o.optString("timezone"))
+        }
+        return out.distinctBy { it.label }
+    }
+
+    /** Uses [p] from now on: the weather's location is set by hand. */
+    fun choose(ctx: Context, p: Place) {
+        val prefs = Prefs(ctx)
+        prefs.weatherPlace = encode(p).toString()
+        prefs.weatherCity = p.label
+        memo = null
+    }
+
+    /** Back to placing the TV by its internet address, looked up afresh. */
+    fun automatic(ctx: Context) {
+        val prefs = Prefs(ctx)
+        prefs.weatherPlace = ""
+        prefs.weatherCity = ""
+        forget(ctx)
+    }
+
+    /** The city picked in Settings, if any. */
+    fun chosen(prefs: Prefs): Place? = prefs.weatherPlace.takeIf { it.isNotEmpty() }
+        ?.let { runCatching { decode(JSONObject(it)) }.getOrNull() }
+
+    /** A city named over adb: a bare name ("Valencia") is told apart by the TV's own clock and region. */
+    private fun geocode(name: String): Place? {
+        val found = search(name)
+        return found.firstOrNull { sameClock(it.zone) == true }
+            ?: found.firstOrNull { it.country.equals(java.util.Locale.getDefault().country, ignoreCase = true) }
+            ?: found.firstOrNull()
+    }
+
+    /**
+     * A few free, keyless services, tried in turn. A VPN, a proxy or a provider that routes through
+     * another country places the TV far from home; its clock knows better, so an answer in another
+     * time zone is passed over, and if every one is, the TV's time zone names the city.
+     */
     private fun fromIp(): Place? {
         val tries = listOf<() -> Place?>(
             {
-                val o = JSONObject(Net.get("https://get.geojs.io/v1/ip/geo.json").decodeToString())
-                Place(o.getString("latitude").toDouble(), o.getString("longitude").toDouble(), o.optString("city"), o.optString("country_code"))
+                val o = JSONObject(Net.get("https://ipinfo.io/json", mapOf("Accept" to "application/json")).decodeToString())
+                val loc = o.getString("loc").split(',')
+                Place(loc[0].trim().toDouble(), loc[1].trim().toDouble(), o.optString("city"), o.optString("country"),
+                    o.optString("region"), o.optString("timezone"))
             },
             {
                 val o = JSONObject(Net.get("https://ipwho.is/").decodeToString())
                 if (!o.optBoolean("success", true)) null
-                else Place(o.getDouble("latitude"), o.getDouble("longitude"), o.optString("city"), o.optString("country_code"))
+                else Place(o.getDouble("latitude"), o.getDouble("longitude"), o.optString("city"), o.optString("country_code"),
+                    o.optString("region"), o.optJSONObject("timezone")?.optString("id").orEmpty())
             },
             {
                 val o = JSONObject(Net.get("https://ipapi.co/json/").decodeToString())
-                Place(o.getDouble("latitude"), o.getDouble("longitude"), o.optString("city"), o.optString("country_code"))
+                Place(o.getDouble("latitude"), o.getDouble("longitude"), o.optString("city"), o.optString("country_code"),
+                    o.optString("region"), o.optString("timezone"))
+            },
+            {
+                val o = JSONObject(Net.get("https://get.geojs.io/v1/ip/geo.json").decodeToString())
+                Place(o.getString("latitude").toDouble(), o.getString("longitude").toDouble(), o.optString("city"),
+                    o.optString("country_code"), o.optString("region"), o.optString("timezone"))
             },
         )
-        for (t in tries) runCatching { t() }.getOrNull()?.let { return it }
-        return null
+        var first: Place? = null
+        for (t in tries) {
+            val p = runCatching { t() }.getOrNull()?.takeIf { it.lat != 0.0 || it.lon != 0.0 } ?: continue
+            if (first == null) first = p
+            if (sameClock(p.zone) != false) return p
+        }
+        return runCatching { fromZone() }.getOrNull() ?: first
     }
+
+    /** The city the TV's time zone is named after (Europe/Madrid: Madrid), if it is set to one. */
+    private fun fromZone(): Place? {
+        val id = java.util.TimeZone.getDefault().id
+        if (!geographic(id)) return null
+        val found = search(id.substringAfterLast('/').replace('_', ' '))
+        return found.firstOrNull { it.zone == id } ?: found.firstOrNull { sameClock(it.zone) == true }
+    }
+
+    /**
+     * Whether [zone] keeps the TV's time, now and through the year; null when either is unknown
+     * (no zone given, or the TV set to plain UTC).
+     */
+    internal fun sameClock(zone: String, tv: java.util.TimeZone = java.util.TimeZone.getDefault()): Boolean? {
+        if (zone.isEmpty() || !geographic(tv.id)) return null
+        val z = java.util.TimeZone.getTimeZone(zone)
+        // An unknown id comes back as GMT.
+        if (z.id == "GMT" && zone != "GMT") return null
+        // Now and half a year on, so a zone that keeps summer time differs from one that doesn't.
+        val now = System.currentTimeMillis()
+        return listOf(now, now + 182L * 24 * 3_600_000L).all { z.getOffset(it) == tv.getOffset(it) }
+    }
+
+    private fun geographic(id: String) = '/' in id && !id.startsWith("Etc/") && !id.startsWith("SystemV/")
+
+    /** Lower case, without accents: "Bogotá" and "bogota" match. */
+    private fun fold(s: String) = java.text.Normalizer.normalize(s.trim(), java.text.Normalizer.Form.NFD)
+        .replace(Regex("\\p{Mn}+"), "").lowercase(java.util.Locale.ROOT)
 
     /** The city found last time, without looking again; null before the first lookup. */
     fun cachedCity(ctx: Context): String? = ctx.getSharedPreferences("geo", Context.MODE_PRIVATE).getString("place", null)
@@ -158,7 +272,9 @@ object Geo {
     }
 
     private fun encode(p: Place) = JSONObject().put("lat", p.lat).put("lon", p.lon).put("city", p.city).put("country", p.country)
-    private fun decode(o: JSONObject) = Place(o.getDouble("lat"), o.getDouble("lon"), o.optString("city"), o.optString("country"))
+        .put("area", p.area).put("zone", p.zone)
+    private fun decode(o: JSONObject) = Place(o.getDouble("lat"), o.getDouble("lon"), o.optString("city"), o.optString("country"),
+        o.optString("area"), o.optString("zone"))
 }
 
 /**

@@ -1457,6 +1457,9 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
             weatherSheet = null
             setGridBlocked(false)
             weatherWidget.requestFocus()
+        }.onChangePlace {
+            weatherSheet?.dismiss()
+            startActivity(Intent(this, SettingsActivity::class.java).putExtra("page", "location"))
         }.show()
     }
 
