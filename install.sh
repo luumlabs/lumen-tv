@@ -2,7 +2,7 @@
 # Lumen installer. Requires bash 3.2+, adb, curl, python3.
 set -euo pipefail
 PKG=com.luumlabs.lumen
-REPO=https://github.com/lesnolie/Lumen
+REPO=https://github.com/luumlabs/lumen-tv
 MODE=install
 FLAVOR=standard
 UNINSTALL=0
@@ -85,10 +85,10 @@ if [[ -n "${APK:-}" ]]; then
 else
   VERSION=${VERSION:-latest}
   if [[ "$VERSION" == latest ]]; then
-    METADATA=https://api.github.com/repos/lesnolie/Lumen/releases/latest
+    METADATA=https://api.github.com/repos/luumlabs/lumen-tv/releases/latest
   else
     [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9._-]+)?$ ]] || fail 'Invalid VERSION tag'
-    METADATA="https://api.github.com/repos/lesnolie/Lumen/releases/tags/$VERSION"
+    METADATA="https://api.github.com/repos/luumlabs/lumen-tv/releases/tags/$VERSION"
   fi
   curl -fLsS "$METADATA" -o "$TMP/release.json"
   python3 - "$TMP/release.json" "$FLAVOR" "$TMP" "$VERSION" <<'PY'
@@ -110,7 +110,7 @@ preferred_checksums = (f"SHA256SUMS-{tag}.txt", "SHA256SUMS.txt")
 def select(candidates):
     for name in candidates:
         if name in assets:
-            expected = f"https://github.com/lesnolie/Lumen/releases/download/{tag}/{name}"
+            expected = f"https://github.com/luumlabs/lumen-tv/releases/download/{tag}/{name}"
             if assets[name] != expected:
                 raise SystemExit("Unexpected release asset URL")
             return name, expected

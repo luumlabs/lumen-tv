@@ -15,8 +15,8 @@ import sys
 import tempfile
 import urllib.request
 
-API = "https://api.github.com/repos/lesnolie/Lumen/releases"
-PUBLIC = "https://github.com/lesnolie/Lumen/releases/download"
+API = "https://api.github.com/repos/luumlabs/lumen-tv/releases"
+PUBLIC = "https://github.com/luumlabs/lumen-tv/releases/download"
 
 
 def fetch(url):
