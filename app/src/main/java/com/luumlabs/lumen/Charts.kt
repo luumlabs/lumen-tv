@@ -326,6 +326,9 @@ object ChartImages {
 
     fun peek(url: String?): Bitmap? = url?.let { cache.get(it) }
 
+    /** Lets every picture go; they are on disk and decode again when next shown. */
+    fun trim() = cache.evictAll()
+
     /** Calls [done] on the main thread with the picture (null if it can't be had). */
     fun load(ctx: Context, url: String?, maxWidth: Int, rgb565: Boolean = false, done: (Bitmap?) -> Unit) {
         if (url == null) { done(null); return }

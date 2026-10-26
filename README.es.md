@@ -55,8 +55,14 @@ La interfaz está en inglés. Lumen TV es un fork independiente de
 
 **Centro de control** (tecla Atrás en la pantalla de inicio)
 
+- Reproduciendo ahora: lo que suena en el televisor, con reproducir, pausa y siguiente.
 - Apagar, reposo, reiniciar, volumen, fuente de entrada, red y liberación de memoria.
 - Brillo de imagen en televisores Sony BRAVIA y Xiaomi.
+
+**Mando**
+
+- Las teclas de encendido, ajustes, entrada, HDMI 1–4, TV y guía funcionan en la pantalla de inicio
+  incluso en firmwares que se las dejan a su propio launcher.
 
 **Salvapantallas y fondos**
 
@@ -115,7 +121,7 @@ Marca *Permitir siempre* y elige *Permitir*.
 
 ```sh
 adb connect 192.168.1.20:5555
-adb install -r Lumen-v3.4.0.apk
+adb install -r Lumen-v3.6.0.apk
 adb shell cmd package set-home-activity com.luumlabs.lumen/.HomeActivity
 adb shell input keyevent KEYCODE_HOME
 ```

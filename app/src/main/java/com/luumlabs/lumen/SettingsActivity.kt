@@ -792,6 +792,13 @@ class SettingsActivity : Activity() {
     private fun idleMinutes() = Settings.System.getInt(contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, 600_000) / 60_000
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        // A power key the system passed on, as some firmwares do to their own launcher (RemoteKeys).
+        if (RemoteKeys.isPower(keyCode)) {
+            if (!event.isCanceled) RemoteKeys.standby(this, keyCode) {
+                Toast.makeText(this, "Couldn't turn the TV off from here. Use Power off in the Control Center.", Toast.LENGTH_LONG).show()
+            }
+            return true
+        }
         val parent = page.parent
         if (keyCode == KeyEvent.KEYCODE_BACK && page == startPage && startPage != Page.MAIN) {
             finish()
@@ -805,5 +812,5 @@ class SettingsActivity : Activity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
-        if (keyCode == KeyEvent.KEYCODE_BACK && page.parent != null) true else super.onKeyDown(keyCode, event)
+        if ((keyCode == KeyEvent.KEYCODE_BACK && page.parent != null) || RemoteKeys.isPower(keyCode)) true else super.onKeyDown(keyCode, event)
 }

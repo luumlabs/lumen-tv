@@ -55,8 +55,14 @@ by lesnolie. See [Credits](#credits).
 
 **Control Center** (the Back key on the home screen)
 
+- Now Playing: what is playing on the TV, with play, pause and skip.
 - Power off, standby, restart, volume, input source, network and memory cleanup.
 - Picture brightness on Sony BRAVIA and Xiaomi TVs.
+
+**Remote**
+
+- The power, settings, input, HDMI 1–4, TV and guide keys work on the home screen even on
+  firmwares that leave them to their own launcher.
 
 **Screensaver and wallpapers**
 
@@ -114,7 +120,7 @@ choose *Allow*.
 
 ```sh
 adb connect 192.168.1.20:5555
-adb install -r Lumen-v3.4.0.apk
+adb install -r Lumen-v3.6.0.apk
 adb shell cmd package set-home-activity com.luumlabs.lumen/.HomeActivity
 adb shell input keyevent KEYCODE_HOME
 ```

@@ -154,6 +154,22 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
             .also { edges[step] = it }
     }
 
+    // ---- Now Playing: what is playing on the TV, from the media sessions the notification
+    // listener (RevivalListener, which reads no notifications) is allowed to see ----
+    private val mediaHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val media = ctx.getSystemService(android.media.session.MediaSessionManager::class.java)
+    private val mediaListener = android.content.ComponentName(ctx, RevivalListener::class.java)
+    private var playing: android.media.session.MediaController? = null
+    private val mediaCallback = object : android.media.session.MediaController.Callback() {
+        override fun onPlaybackStateChanged(state: android.media.session.PlaybackState?) = showMedia()
+        override fun onMetadataChanged(metadata: android.media.MediaMetadata?) = showMedia()
+        override fun onSessionDestroyed() = watchMedia()
+    }
+    private val sessionsChanged = android.media.session.MediaSessionManager.OnActiveSessionsChangedListener { watchMedia() }
+    private val mediaRow: LinearLayout
+    private val nowPlaying: GlassButton
+    private val skip: GlassButton
+
     private val memButton: GlassButton
     private val brightness: Slider
     private val volume: Slider
@@ -186,6 +202,14 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
     private var rowsTween: Tween? = null
 
     init {
+        // Above everything while something plays, as on tvOS: the title, and play / pause and skip.
+        mediaRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false; visibility = View.GONE }
+        nowPlaying = GlassButton("Now Playing", R.drawable.ic_play, Shape.CAPSULE) { playPause() }
+        skip = GlassButton("Next", R.drawable.ic_next, Shape.ROUND) { playing?.transportControls?.skipToNext() }
+        mediaRow.addView(nowPlaying, LinearLayout.LayoutParams(0, cell, 1f))
+        mediaRow.addView(skip, LinearLayout.LayoutParams(cell, cell).apply { marginStart = gap })
+        panel.addView(mediaRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = gap })
+
         // tvOS layout: a square power tile beside two capsules, then a row of round buttons.
         val top = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false }
         val power = GlassButton("Power off", R.drawable.ic_power, Shape.TILE) {
@@ -484,6 +508,79 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         invalidateSurfaces()
     }
 
+    /** Follows the media sessions while the Control Center is open; nothing is watched once it closes. */
+    private fun startMedia() {
+        runCatching { media.addOnActiveSessionsChangedListener(sessionsChanged, mediaListener, mediaHandler) }
+        watchMedia()
+    }
+
+    private fun stopMedia() {
+        runCatching { media.removeOnActiveSessionsChangedListener(sessionsChanged) }
+        playing?.unregisterCallback(mediaCallback)
+        playing = null
+    }
+
+    /**
+     * The session to show: one that is playing, else a paused one with a title. None without
+     * notification access (then [android.media.session.MediaSessionManager] refuses).
+     */
+    private fun watchMedia() {
+        val list = runCatching { media.getActiveSessions(mediaListener) }.getOrNull().orEmpty()
+            .filter { it.packageName != ctx.packageName }
+        val pick = list.firstOrNull { isPlaying(it) }
+            ?: list.firstOrNull { it.playbackState?.state == android.media.session.PlaybackState.STATE_PAUSED && it.metadata != null }
+        if (pick?.sessionToken != playing?.sessionToken) {
+            playing?.unregisterCallback(mediaCallback)
+            playing = pick
+            pick?.registerCallback(mediaCallback, mediaHandler)
+        }
+        showMedia()
+    }
+
+    private fun isPlaying(c: android.media.session.MediaController) = c.playbackState?.state.let {
+        it == android.media.session.PlaybackState.STATE_PLAYING || it == android.media.session.PlaybackState.STATE_BUFFERING
+    }
+
+    private fun showMedia() {
+        if (destroyed) return
+        val c = playing
+        val meta = c?.metadata
+        val title = meta?.getString(android.media.MediaMetadata.METADATA_KEY_TITLE)
+            ?: meta?.getString(android.media.MediaMetadata.METADATA_KEY_DISPLAY_TITLE)
+        val shown = c != null && !title.isNullOrBlank()
+        if (c != null && shown) {
+            val on = isPlaying(c)
+            nowPlaying.title.text = title
+            val who = listOf(android.media.MediaMetadata.METADATA_KEY_ARTIST, android.media.MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE,
+                android.media.MediaMetadata.METADATA_KEY_ALBUM).firstNotNullOfOrNull { k -> meta?.getString(k)?.takeIf { it.isNotBlank() } }
+            val app = runCatching { ctx.packageManager.getApplicationLabel(ctx.packageManager.getApplicationInfo(c.packageName, 0)).toString() }.getOrNull()
+            nowPlaying.sub.text = listOfNotNull(who, app).distinct().joinToString(" · ")
+            nowPlaying.sub.visibility = if (nowPlaying.sub.text.isEmpty()) View.GONE else View.VISIBLE
+            nowPlaying.setIcon(if (on) R.drawable.ic_pause else R.drawable.ic_play)
+            nowPlaying.contentDescription = if (on) "Pause $title" else "Play $title"
+            val canSkip = (c.playbackState?.actions ?: 0L) and android.media.session.PlaybackState.ACTION_SKIP_TO_NEXT != 0L
+            if (!canSkip && skip.isFocused) nowPlaying.requestFocus()
+            skip.visibility = if (canSkip) View.VISIBLE else View.GONE
+        }
+        val v = if (shown) View.VISIBLE else View.GONE
+        if (mediaRow.visibility == v) return
+        if (!shown && mediaRow.hasFocus()) memButton.requestFocus()
+        mediaRow.visibility = v
+        // The panel grows or shrinks: the glass behind it is sampled again once it has.
+        panel.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
+            override fun onLayoutChange(view: View, l: Int, t: Int, r: Int, b: Int, ol: Int, ot: Int, or: Int, ob: Int) {
+                view.removeOnLayoutChangeListener(this)
+                blurDirty = true
+                view.post(resample)
+            }
+        })
+    }
+
+    private fun playPause() {
+        val c = playing ?: return
+        if (isPlaying(c)) c.transportControls.pause() else c.transportControls.play()
+    }
+
     private enum class Shape { TILE, CAPSULE, ROUND }
 
     private inner class GlassButton(
@@ -723,6 +820,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         panel.animate().cancel()
         scrim.animate().cancel()
         refresh()
+        startMedia()
         home.setGridBlocked(true)
         // A full-screen pass every frame: only the panel look, which hides less of the screen, uses it.
         if (scrim.parent == null && !glassStyle) host.addView(scrim, FrameLayout.LayoutParams(-1, -1))
@@ -773,6 +871,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
     fun close() {
         if (!isOpen) return
         isOpen = false
+        stopMedia()
         host.removeCallbacks(ticker)
         brightness.finishAnimation()
         volume.finishAnimation()
@@ -794,6 +893,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
     fun destroy() {
         destroyed = true
         isOpen = false
+        stopMedia()
         host.removeCallbacks(ticker)
         host.removeCallbacks(resample)
         panel.animate().cancel()
@@ -856,12 +956,56 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         // The list replaces the panel instead of stacking on top of it.
         close()
         val sheet = Sheet(host).title("Input").message(null)
-        for (i in inputs) sheet.button(i.name, R.drawable.ic_input) {
-            io.execute { tv.setInput(i) }
-        }
+        for (i in inputs) sheet.button(i.name, R.drawable.ic_input) { switchTo(i) }
         sheet.button("Show on Home Screen…") { pinInputs() }
         sheet.button("Cancel") {}
         home.showSheet(sheet)
+    }
+
+    /** Switches to [i], saying so when nothing on the TV took it. */
+    fun switchTo(i: Input) {
+        io.execute {
+            if (tv.setInput(i)) return@execute
+            host.post {
+                android.widget.Toast.makeText(ctx, if (prefs.adbAuthorized) "Couldn't switch to ${i.name}"
+                    else "Couldn't switch to ${i.name}. Allowing local debugging (Settings → System) lets Lumen use the remote's input keys.",
+                    android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    /**
+     * The remote's input key reached the home screen: the inputs to choose from, or straight to
+     * the TV's own picker where that is the only entry (TCL, Coocaa).
+     */
+    fun showInputs() = withInputs { list ->
+        val only = list.singleOrNull()
+        if (only != null && only.port == null) switchTo(only) else pickInput()
+    }
+
+    /** The remote's HDMI 1–4 keys reached the home screen: straight to that port. */
+    fun switchToHdmi(n: Int) = withInputs { list ->
+        val port = list.firstOrNull { it.port == n }
+        when {
+            port != null -> switchTo(port)
+            // A picker of the TV's own: the port is chosen there.
+            list.size == 1 && list[0].port == null -> switchTo(list[0])
+            else -> pickInput()
+        }
+    }
+
+    /** Runs [then] with the TV's inputs, read first if the panel hasn't been opened yet. */
+    private fun withInputs(then: (List<Input>) -> Unit) {
+        if (inputs.isNotEmpty()) { then(inputs); return }
+        io.execute {
+            val list = tv.inputs()
+            host.post {
+                if (destroyed) return@post
+                inputs = list
+                if (list.isEmpty()) android.widget.Toast.makeText(ctx, "This TV doesn't list its inputs", android.widget.Toast.LENGTH_SHORT).show()
+                else then(list)
+            }
+        }
     }
 
     /** Inputs shown as tiles on the home grid; one press there switches to them. */

@@ -287,6 +287,12 @@ class ChartsWidget(ctx: Context, source: GlassSource, w: Int, h: Int) : WidgetCa
         pending?.let { main.removeCallbacks(it); it.run() }
     }
 
+    /** Lets go of the picture faded out behind the one showing (the home screen is hidden). */
+    fun trim() {
+        val hidden = arts[1 - front]
+        if (hidden.alpha == 0f) hidden.setImageDrawable(null)
+    }
+
     override fun onDetachedFromWindow() {
         stop()
         super.onDetachedFromWindow()

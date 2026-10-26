@@ -66,7 +66,7 @@ class TileArt(val back: Bitmap, val front: Bitmap? = null) {
 class AppRepo(private val ctx: Context) {
     private val pm: PackageManager = ctx.packageManager
     private val prefs = Prefs(ctx)
-    private val tiles = object : LruCache<String, TileArt>(24 * 1024 * 1024) {
+    private val tiles = object : LruCache<String, TileArt>((if (Device.isLowEnd(ctx)) 14 else 24) * 1024 * 1024) {
         override fun sizeOf(key: String, value: TileArt) = value.bytes
     }
 
@@ -232,6 +232,12 @@ class AppRepo(private val ctx: Context) {
         val muted = (p.mutedSwatch ?: p.vibrantSwatch ?: p.lightMutedSwatch)?.rgb ?: blend(main, deep, 0.5f)
         intArrayOf(main, deep, muted)
     }.getOrDefault(intArrayOf(FALLBACK, blend(FALLBACK, Color.BLACK, 0.55f), FALLBACK))
+
+    /**
+     * Keeps only the most recently drawn tiles, about a screenful: the home screen is behind
+     * another app. Tiles still on screen stay in memory with their views either way.
+     */
+    fun trimTiles() = tiles.trimToSize(tiles.maxSize() / 4)
 
     /** Drops the cached tile of [pkg] (it was updated or removed), or of every app. */
     fun invalidate(pkg: String? = null) {

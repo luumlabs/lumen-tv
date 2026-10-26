@@ -912,7 +912,7 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
         if (moving >= 0) { endMove(); return }
         val app = adapter.apps.getOrNull(pos) ?: return
         app.folder?.let { openFolder(it); return }
-        app.input?.let { i -> io.execute { tv.setInput(i) }; return }
+        app.input?.let { i -> control.switchTo(i); return }
         // The stock launcher (Xiaomi's PatchWall) can only be opened through the system Home action.
         if (HomeGuardService.isStockHome(app.pkg) && HomeGuardService.openStockLauncher()) {
             rememberOpened(app.pkg)
@@ -1243,6 +1243,61 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
         widgets.descendantFocusability = mode
     }
 
+    /**
+     * Keys some firmwares leave to their own launcher instead of acting on them: power, settings,
+     * input, the HDMI keys and live TV. Answered on release, so a held key acts once.
+     */
+    private fun remoteKey(e: KeyEvent): Boolean {
+        val code = e.keyCode
+        val known = RemoteKeys.isPower(code) || code == KeyEvent.KEYCODE_SETTINGS || code == KeyEvent.KEYCODE_TV_INPUT ||
+            code in RemoteKeys.HDMI || code in RemoteKeys.LIVE_TV
+        if (!known) return false
+        if (e.action != KeyEvent.ACTION_UP || e.isCanceled) return true
+        when {
+            RemoteKeys.isPower(code) -> {
+                if (prefs.adbAuthorized) RemoteKeys.standby(this, code) { reached -> powerMenu(reached) } else powerMenu(false)
+            }
+            code == KeyEvent.KEYCODE_SETTINGS -> runCatching { startActivity(tv.settingsIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                .onFailure { startActivity(Intent(this, SettingsActivity::class.java)) }
+            code == KeyEvent.KEYCODE_TV_INPUT -> control.showInputs()
+            code in RemoteKeys.HDMI -> control.switchToHdmi(RemoteKeys.HDMI.getValue(code))
+            else -> if (!openLiveTv()) control.showInputs()
+        }
+        return true
+    }
+
+    /**
+     * The power key couldn't put the TV to sleep directly: the ways that remain. [reached] is
+     * whether local debugging answered (the firmware ignored the key it was sent).
+     */
+    private fun powerMenu(reached: Boolean) {
+        if (sheets.isNotEmpty() || isFinishing) return
+        control.close()
+        val s = Sheet(root).title("Turn Off the TV")
+        when {
+            reached -> s.message(null)
+                .button("Power off", R.drawable.ic_power) { Cleaner.shutdown(this) }
+                .button("Restart", R.drawable.ic_restart) { Cleaner.reboot(this) }
+            prefs.adbAuthorized -> s.message("Lumen turns the TV off through its local debugging, which isn't answering. " +
+                "It may have been switched off: choose Try Again, and if the TV asks “Allow debugging?”, check “Always allow” and choose Allow.")
+                .button("Try Again") { authorizeAdb() }
+            else -> s.message("To turn the TV off from the remote, Lumen needs local debugging, allowed once. " +
+                "After you choose Allow, the TV asks “Allow debugging?”: check “Always allow” and choose Allow.")
+                .button("Allow") { authorizeAdb() }
+        }
+        showSheet(s.button("Cancel") {})
+    }
+
+    /** The TV's own live-TV app (a system app that plays TV channels), opened where it was left. */
+    private fun openLiveTv(): Boolean {
+        val probe = Intent(Intent.ACTION_VIEW, android.media.tv.TvContract.buildChannelUri(1))
+        val pkg = runCatching { packageManager.queryIntentActivities(probe, 0) }.getOrDefault(emptyList())
+            .firstOrNull { (it.activityInfo.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0 }
+            ?.activityInfo?.packageName ?: return false
+        val launch = packageManager.getLeanbackLaunchIntentForPackage(pkg) ?: packageManager.getLaunchIntentForPackage(pkg) ?: return false
+        return runCatching { startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true }.getOrDefault(false)
+    }
+
     fun restoreGridFocus() {
         folderView?.let { if (it.isOpen) { it.refocus(); return } }
         setGridBlocked(false)
@@ -1254,9 +1309,11 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
         noteActivity()
         // Any key heals a dock left behind by an interrupted animation before it is acted on.
         if (event.action == KeyEvent.ACTION_DOWN) syncDock()
+        if (RemoteKeys.isPower(event.keyCode)) return remoteKey(event)
         // Any key skips the intro to its closing zoom; nothing behind it reacts meanwhile.
         intro?.let { if (event.action == KeyEvent.ACTION_UP) it.skip(); return true }
         val code = event.keyCode
+        if (remoteKey(event)) return true
         if (event.action == KeyEvent.ACTION_DOWN && code == KeyEvent.KEYCODE_DPAD_RIGHT && folderView == null && chartsView == null &&
             sheets.isEmpty() && control.isOpen && avatar.isShown && control.atRightEdge()) {
             control.close()
@@ -1334,6 +1391,22 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
         main.removeCallbacks(stillness)
         main.postDelayed(stillness, IDLE_MOTION_MS)
         main.post { (currentFocus as? TileCell)?.wake() }
+    }
+
+    /**
+     * The keeper service holds this process in memory, so the system can't reclaim it as it does
+     * a home screen behind a video app. Pictures that can be decoded again go as soon as the home
+     * screen is hidden, leaving the memory to the app in front, its player and its streaming
+     * engine. What is on screen (the wallpaper, the tiles in view) stays, so coming back is instant.
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        val pressed = level == TRIM_MEMORY_RUNNING_LOW || level == TRIM_MEMORY_RUNNING_CRITICAL
+        if (level < TRIM_MEMORY_UI_HIDDEN && !pressed) return
+        if (resumed && !pressed) return
+        ChartImages.trim()
+        repo.trimTiles()
+        if (chartsView == null) chartsWidget.trim()
     }
 
     override fun onPause() {

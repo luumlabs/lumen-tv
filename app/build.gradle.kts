@@ -10,8 +10,8 @@ android {
         applicationId = "com.luumlabs.lumen"
         minSdk = 28
         targetSdk = 31
-        versionCode = 40
-        versionName = "3.5.0"
+        versionCode = 41
+        versionName = "3.6.0"
     }
 
     // standard declares itself a home screen. guard does not: TCL's package verifier refuses any
