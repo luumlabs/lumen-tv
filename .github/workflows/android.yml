@@ -10,6 +10,8 @@ on:
       - 'tools/test-install.sh'
       - 'tools/download-release.py'
       - 'tools/test_release_download.py'
+      - 'tools/verify-apk-upgrade.py'
+      - 'tools/test_apk_upgrade.py'
       - 'gradle/**'
       - '*.gradle.kts'
       - '.github/workflows/android.yml'
@@ -22,6 +24,8 @@ on:
       - 'tools/test-install.sh'
       - 'tools/download-release.py'
       - 'tools/test_release_download.py'
+      - 'tools/verify-apk-upgrade.py'
+      - 'tools/test_apk_upgrade.py'
       - 'gradle/**'
       - '*.gradle.kts'
       - '.github/workflows/android.yml'
@@ -62,7 +66,9 @@ jobs:
         run: bash tools/test-install.sh
 
       - name: Test versioned release downloader
-        run: python3 -m unittest discover -s tools -p 'test_release_download.py' -v
+        run: |
+          python3 -m unittest discover -s tools -p 'test_release_download.py' -v
+          python3 -m unittest discover -s tools -p 'test_apk_upgrade.py' -v
 
       - name: Build both release APK flavors
         run: bash ./gradlew --no-daemon :app:assembleStandardRelease :app:assembleGuardRelease --stacktrace

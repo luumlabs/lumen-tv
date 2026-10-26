@@ -38,6 +38,7 @@ jobs:
         run: |
           bash tools/test-install.sh
           python3 -m unittest discover -s tools -p 'test_release_download.py' -v
+          python3 -m unittest discover -s tools -p 'test_apk_upgrade.py' -v
           bash ./gradlew --no-daemon testStandardDebugUnitTest testGuardDebugUnitTest assembleStandardRelease assembleGuardRelease lintStandardRelease lintGuardRelease
       - name: Verify release identity and checksums
         run: |
@@ -54,6 +55,17 @@ jobs:
             grep -F '70b95a41ee2160ca79d33515d77b4b109be587f07a332add18ade4d4da518586' "$RUNNER_TEMP/cert.txt"
           done
           (cd dist && sha256sum "Lumen-$GITHUB_REF_NAME.apk" "Lumen-guard-$GITHUB_REF_NAME.apk" > "SHA256SUMS-$GITHUB_REF_NAME.txt")
+      - name: Verify upgrade compatibility with the previous release
+        run: |
+          set -euo pipefail
+          # Same package, same signing certificate, a higher versionCode, the same Android
+          # requirements and HOME declaration: what an installed copy needs to update in place.
+          OLD_STANDARD=$(python3 tools/download-release.py standard)
+          OLD_GUARD=$(python3 tools/download-release.py guard)
+          python3 tools/verify-apk-upgrade.py "$OLD_STANDARD" "dist/Lumen-$GITHUB_REF_NAME.apk" \
+            --tools "$ANDROID_HOME/build-tools/36.0.0" --version "${GITHUB_REF_NAME#v}" --flavor standard
+          python3 tools/verify-apk-upgrade.py "$OLD_GUARD" "dist/Lumen-guard-$GITHUB_REF_NAME.apk" \
+            --tools "$ANDROID_HOME/build-tools/36.0.0" --version "${GITHUB_REF_NAME#v}" --flavor guard
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
