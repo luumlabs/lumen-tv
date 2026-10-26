@@ -499,11 +499,6 @@ class WeatherSheet(private val host: FrameLayout, private val n: WeatherData.Now
             gravity = Gravity.CENTER
         }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = ctx.dp(16) })
         root.addView(card, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
-        root.setOnKeyListener { _, code, e ->
-            val ok = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER || code == KeyEvent.KEYCODE_NUMPAD_ENTER
-            if (ok && e.action == KeyEvent.ACTION_UP && !leaving) onChangePlace?.invoke()
-            ok
-        }
     }
 
     fun onDismiss(f: () -> Unit) = apply { onDismiss = f }
@@ -558,9 +553,15 @@ class WeatherSheet(private val host: FrameLayout, private val n: WeatherData.Now
     }
 
     init {
+        // One listener: OK changes the location when the home screen offers it (else closes), Back
+        // closes, and every other key but Home stays with the sheet.
         root.setOnKeyListener { _, code, e ->
-            if (e.action == KeyEvent.ACTION_UP && (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER)) { dismiss(); true }
-            else code != KeyEvent.KEYCODE_BACK && code != KeyEvent.KEYCODE_HOME
+            val ok = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER || code == KeyEvent.KEYCODE_NUMPAD_ENTER
+            if (e.action == KeyEvent.ACTION_UP && !leaving && (ok || code == KeyEvent.KEYCODE_BACK)) {
+                val change = onChangePlace
+                if (ok && change != null) change() else dismiss()
+                true
+            } else code != KeyEvent.KEYCODE_BACK && code != KeyEvent.KEYCODE_HOME
         }
     }
 }
