@@ -794,8 +794,10 @@ class SettingsActivity : Activity() {
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         // A power key the system passed on, as some firmwares do to their own launcher (RemoteKeys).
         if (RemoteKeys.isPower(keyCode)) {
-            if (!event.isCanceled) RemoteKeys.standby(this, keyCode) {
-                Toast.makeText(this, "Couldn't turn the TV off from here. Use Power off in the Control Center.", Toast.LENGTH_LONG).show()
+            val offHere = "Couldn't turn the TV off from here. Use Power off in the Control Center."
+            if (RemoteKeys.pressed(event)) {
+                if (prefs.adbAuthorized) RemoteKeys.standby(this, event) { Toast.makeText(this, offHere, Toast.LENGTH_LONG).show() }
+                else Toast.makeText(this, offHere, Toast.LENGTH_LONG).show()
             }
             return true
         }
@@ -811,6 +813,8 @@ class SettingsActivity : Activity() {
         return super.onKeyUp(keyCode, event)
     }
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
-        if ((keyCode == KeyEvent.KEYCODE_BACK && page.parent != null) || RemoteKeys.isPower(keyCode)) true else super.onKeyDown(keyCode, event)
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (RemoteKeys.isPower(keyCode)) { RemoteKeys.pressed(event); return true }
+        return if (keyCode == KeyEvent.KEYCODE_BACK && page.parent != null) true else super.onKeyDown(keyCode, event)
+    }
 }

@@ -180,6 +180,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
     private val status = ctx.text(11f, Color.argb(190, 255, 255, 255))
     private val focusables = ArrayList<View>()
     private val io = Executors.newSingleThreadExecutor()
+    private val switcher = Executors.newSingleThreadExecutor()
     private val tv = TvControls(ctx)
     private val ticker = object : Runnable {
         override fun run() {
@@ -904,6 +905,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         blur = null
         blurShader = null
         io.shutdown()
+        switcher.shutdown()
     }
 
     fun refocus() {
@@ -962,9 +964,12 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         home.showSheet(sheet)
     }
 
-    /** Switches to [i], saying so when nothing on the TV took it. */
+    /**
+     * Switches to [i], saying so when nothing on the TV took it. On a thread of its own: the
+     * remote's HDMI key through local debugging can take seconds, and the sliders share [io].
+     */
     fun switchTo(i: Input) {
-        io.execute {
+        switcher.execute {
             if (tv.setInput(i)) return@execute
             host.post {
                 android.widget.Toast.makeText(ctx, if (prefs.adbAuthorized) "Couldn't switch to ${i.name}"

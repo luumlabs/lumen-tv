@@ -11,6 +11,7 @@ import android.provider.Settings
 import android.util.Log
 import com.luumlabs.lumen.LocalAdb
 import com.luumlabs.lumen.Prefs
+import com.luumlabs.lumen.RemoteKeys
 
 /** An HDMI input. [uri] is whatever the adapter that listed it needs to switch to it; it is also kept for inputs pinned to the home grid. */
 data class Input(val uri: String, val title: String, val label: String, val connected: Boolean) {
@@ -134,6 +135,7 @@ open class AndroidAdapter(protected val ctx: Context) : TvAdapter {
     protected fun hdmiKey(i: Input): Boolean {
         val port = i.port?.takeIf { it in 1..4 } ?: return false
         if (!Prefs(ctx).adbAuthorized) return false
+        RemoteKeys.sendingHdmiKey()
         return LocalAdb.shell(ctx, "input keyevent KEYCODE_TV_INPUT_HDMI_$port") != null
     }
 

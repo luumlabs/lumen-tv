@@ -23,6 +23,23 @@ object Updates {
     val executor = Executors.newSingleThreadExecutor()
     private const val CHANNEL = "software_updates"
     fun prefs(c: Context) = c.getSharedPreferences("software_updates", Context.MODE_PRIVATE)
+
+    /** Whether one of our install sessions for [p] is still open (waiting to be confirmed on the TV). */
+    private fun pending(c: Context, p: Product): Boolean =
+        runCatching { c.packageManager.packageInstaller.mySessions.any { it.appPackageName == p.pkg } }.getOrDefault(false)
+
+    /** Gives up our open install sessions for [p]: a confirmation that went away would otherwise block every later update. */
+    private fun abandonPending(c: Context, p: Product) {
+        val installer = c.packageManager.packageInstaller
+        runCatching { installer.mySessions.filter { it.appPackageName == p.pkg }.forEach { installer.abandonSession(it.sessionId) } }
+        prefs(c).edit().remove(p.pkg + ".session").remove(p.pkg + ".confirmation").apply()
+    }
+
+    /** Shows the TV's install confirmation for [p] again, if it is still waiting for one. */
+    private fun reopenConfirmation(c: Context, p: Product): Boolean {
+        val uri = prefs(c).getString(p.pkg + ".confirmation", null) ?: return false
+        return runCatching { c.startActivity(Intent.parseUri(uri, 0).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess
+    }
     fun installed(c: Context, p: Product) = runCatching { c.packageManager.getPackageInfo(p.pkg, 0).versionName ?: "0.0" }.getOrNull()
     fun schedule(c: Context) {
         val scheduler = c.getSystemService(JobScheduler::class.java)
@@ -59,6 +76,8 @@ object Updates {
             val url = asset.getString("browser_download_url")
             check(url.startsWith("https://github.com/${p.repo}/releases/download/"))
             val status = when { current == null -> "Not installed · $version available"; update -> "$current → $version"; else -> "$current · up to date (stable $version)" }
+            // Updated some other way (adb, a newer APK): a session of ours left waiting has nothing left to install.
+            if (!update && pending(c, p)) abandonPending(c, p)
             prefs(c).edit().putString(p.pkg + ".status", status).putBoolean(p.pkg + ".available", update)
                 .putString(p.pkg + ".url", url).putString(p.pkg + ".version", version)
                 .putString(p.pkg + ".digest", asset.optString("digest"))
@@ -78,12 +97,20 @@ object Updates {
         }
     }
     private fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
-    fun install(c: Context, p: Product) {
+    /**
+     * Downloads, verifies and installs [p]. [interactive] is false for the background job: it never
+     * puts the confirmation back on screen, nor drops an install the viewer may be confirming.
+     */
+    fun install(c: Context, p: Product, interactive: Boolean = true) {
         check(c.packageManager.canRequestPackageInstalls()) { "Allow Lumen to install unknown apps first" }
         val sp = prefs(c)
-        val existing = sp.getInt(p.pkg + ".session", -1)
-        if (existing >= 0 && c.packageManager.packageInstaller.getSessionInfo(existing) != null)
-            error("An install is already pending; check the software update notification and confirm")
+        if (pending(c, p)) {
+            check(interactive) { "An install is waiting for confirmation; open Software Updates to continue it" }
+            // Still waiting on the TV's confirmation: show it again rather than download anew.
+            if (reopenConfirmation(c, p)) return
+            // Nothing left to confirm (the screen was dismissed, or the TV dropped it): start over.
+            abandonPending(c, p)
+        }
         check(sp.getBoolean(p.pkg + ".available", false)) { "Check for updates first" }
         val file = File(c.cacheDir, p.pkg + "-update.apk")
         try {
@@ -113,11 +140,32 @@ object Updates {
             check((archive.applicationInfo?.minSdkVersion ?: Int.MAX_VALUE) <= Build.VERSION.SDK_INT) { "Unsupported TV system version" }
             val old = runCatching { pm.getPackageInfo(p.pkg, PackageManager.GET_SIGNING_CERTIFICATES) }.getOrNull()
             if (old != null) check(archive.longVersionCode > old.longVersionCode) { "No newer version, nothing to install" }
-            fun certs(info: android.content.pm.PackageInfo) = info.signingInfo?.apkContentsSigners?.map { hex(MessageDigest.getInstance("SHA-256").digest(it.toByteArray())) }?.toSet().orEmpty()
-            val signatures = certs(archive)
+            // Android 9 and 10 can return a package on disk without its signingInfo; there, and only
+            // there, the package is read again with GET_SIGNATURES (from Tigris 2.0.8, #39). Newer
+            // Android never falls back to the legacy certificates.
+            fun certs(info: android.content.pm.PackageInfo?): Set<String> {
+                @Suppress("DEPRECATION")
+                val signers = info?.signingInfo?.apkContentsSigners?.takeIf { it.isNotEmpty() }
+                    ?: info?.signatures?.takeIf { it.isNotEmpty() }
+                return signers?.map { hex(MessageDigest.getInstance("SHA-256").digest(it.toByteArray())) }?.toSet().orEmpty()
+            }
+            val legacyAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.R
+            @Suppress("DEPRECATION")
+            val signatures = UpdateSignerPolicy.withLegacyFallback(certs(archive), legacyAllowed) {
+                val legacy = pm.getPackageArchiveInfo(file.path, PackageManager.GET_SIGNATURES)
+                // A second reading that disagrees on which package this is is never trusted.
+                if (legacy?.packageName == archive.packageName) certs(legacy) else emptySet()
+            }
             check(signatures.isNotEmpty()) { "Package signature missing" }
-            if (old != null) check(signatures == certs(old)) { "Different signature: can't upgrade keeping settings; the old version was not uninstalled" }
-            else check(p.pkg == products[1].pkg && signatures == setOf(MIRACAST_CERT)) { "Untrusted casting signature" }
+            if (old != null) {
+                @Suppress("DEPRECATION")
+                val installedSignatures = UpdateSignerPolicy.withLegacyFallback(certs(old), legacyAllowed) {
+                    certs(runCatching { pm.getPackageInfo(p.pkg, PackageManager.GET_SIGNATURES) }.getOrNull())
+                }
+                check(UpdateSignerPolicy.sameSigner(signatures, installedSignatures)) {
+                    "Different signature: can't upgrade keeping settings; the old version was not uninstalled"
+                }
+            } else check(UpdateSignerPolicy.matchesPinned(signatures, p.pkg == products[1].pkg, MIRACAST_CERT)) { "Untrusted casting signature" }
             val installer = pm.packageInstaller
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
                 setAppPackageName(p.pkg)
@@ -154,7 +202,7 @@ class UpdateJob : JobService() {
                 Updates.check(this)
                 if (Updates.prefs(this).getBoolean("auto", false)) for (p in Updates.products) {
                     if (Updates.installed(this, p) != null && Updates.prefs(this).getBoolean(p.pkg + ".available", false)) {
-                        runCatching { Updates.install(this, p) }.onFailure { Updates.notify(this, p, it.message ?: "Update failed") }
+                        runCatching { Updates.install(this, p, interactive = false) }.onFailure { Updates.notify(this, p, it.message ?: "Update failed") }
                     }
                 }
             } finally { jobFinished(params, false) }
@@ -171,11 +219,14 @@ class UpdateResult : BroadcastReceiver() {
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
             val confirmation = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return
             confirmation.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            // Kept so a later "Install / update" can show it again instead of finding the session stuck.
+            Updates.prefs(context).edit().putString(p.pkg + ".confirmation", confirmation.toUri(0)).apply()
             Updates.notify(context, p, "Please confirm the update install", confirmation)
             runCatching { context.startActivity(confirmation) }
         } else {
             val message = if (status == PackageInstaller.STATUS_SUCCESS) "Installed successfully" else "Install incomplete: ${intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)}"
-            Updates.prefs(context).edit().remove(p.pkg + ".session").putString(p.pkg + ".status", message).putBoolean(p.pkg + ".available", false).apply()
+            Updates.prefs(context).edit().remove(p.pkg + ".session").remove(p.pkg + ".confirmation")
+                .putString(p.pkg + ".status", message).putBoolean(p.pkg + ".available", false).apply()
             Updates.notify(context, p, message)
         }
     }

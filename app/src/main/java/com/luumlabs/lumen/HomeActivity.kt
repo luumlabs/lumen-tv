@@ -237,7 +237,10 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
             addAction(Intent.ACTION_PACKAGE_CHANGED)
             addDataScheme("package")
         })
-        registerReceiver(screenOn, IntentFilter(Intent.ACTION_SCREEN_ON))
+        registerReceiver(screenOn, IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+        })
         KeeperService.start(this)
         if (!prefs.adbAuthorized) main.postDelayed({ askAdbAuthorization() }, if (intro != null) 8000L else 1500L)
     }
@@ -246,15 +249,37 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
 
     /*
      * Waking from standby works like a boot: the home screen comes to the front, whatever was open,
-     * and the intro plays. The broadcast can arrive before or after onResume, so both places check.
+     * and the intro plays. The screen is covered as it goes off, before Xiaomi can show the home
+     * screen's last frame on wake; the wake is then played once, from onResume or SCREEN_ON,
+     * whichever comes first (Tigris 2.0.7).
      */
     private var resumed = false
     private var wakeIntro = false
+    private var wakeCover: View? = null
+
+    private fun armWakeIntro() {
+        if (prefs.intro != Prefs.INTRO_WAKE) return
+        wakeIntro = true
+        if (wakeCover == null) wakeCover = View(this).apply {
+            setBackgroundColor(Color.BLACK)
+            translationZ = dp(401).toFloat()
+            root.addView(this, FrameLayout.LayoutParams(-1, -1))
+        }
+    }
+
+    private fun consumeWakeIntro() {
+        if (!wakeIntro) return
+        wakeIntro = false
+        if (prefs.intro == Prefs.INTRO_WAKE) playIntro(wake = true)
+        wakeCover?.let { root.removeView(it) }
+        wakeCover = null
+    }
+
     private val screenOn = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
-            if (prefs.intro != Prefs.INTRO_WAKE) return
-            if (resumed) { playIntro(wake = true); return }
-            wakeIntro = true
+            if (i.action == Intent.ACTION_SCREEN_OFF) { armWakeIntro(); return }
+            if (!wakeIntro) return
+            if (resumed) { consumeWakeIntro(); return }
             // The home app may start activities from the background.
             startActivity(Intent(c, HomeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(EXTRA_WAKE, true))
         }
@@ -1252,15 +1277,18 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
         val known = RemoteKeys.isPower(code) || code == KeyEvent.KEYCODE_SETTINGS || code == KeyEvent.KEYCODE_TV_INPUT ||
             code in RemoteKeys.HDMI || code in RemoteKeys.LIVE_TV
         if (!known) return false
-        if (e.action != KeyEvent.ACTION_UP || e.isCanceled) return true
+        if (!RemoteKeys.pressed(e)) return true
         when {
             RemoteKeys.isPower(code) -> {
-                if (prefs.adbAuthorized) RemoteKeys.standby(this, code) { reached -> powerMenu(reached) } else powerMenu(false)
+                if (prefs.adbAuthorized) RemoteKeys.standby(this, e) { reached -> powerMenu(reached) } else powerMenu(false)
             }
             code == KeyEvent.KEYCODE_SETTINGS -> runCatching { startActivity(tv.settingsIntent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
                 .onFailure { startActivity(Intent(this, SettingsActivity::class.java)) }
             code == KeyEvent.KEYCODE_TV_INPUT -> control.showInputs()
-            code in RemoteKeys.HDMI -> control.switchToHdmi(RemoteKeys.HDMI.getValue(code))
+            // The HDMI key Lumen sent came back: the firmware passes it on rather than switching.
+            code in RemoteKeys.HDMI -> if (RemoteKeys.isHdmiEcho(e))
+                Toast.makeText(this, "This TV doesn't switch inputs from its HDMI keys", Toast.LENGTH_LONG).show()
+            else control.switchToHdmi(RemoteKeys.HDMI.getValue(code))
             else -> if (!openLiveTv()) control.showInputs()
         }
         return true
@@ -1341,7 +1369,7 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.getBooleanExtra(Intro.EXTRA_PREVIEW, false)) { playIntro(preview = true); return }
-        if (intent.getBooleanExtra(EXTRA_WAKE, false)) return  // onResume plays the intro
+        if (intent.getBooleanExtra(EXTRA_WAKE, false)) return  // onResume plays the pending wake; never re-armed here
         // Home pressed while already home: close everything and go back to the top.
         sheets.toList().forEach { it.dismiss() }
         folderView?.close()
@@ -1372,7 +1400,7 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
         applyClockStyle()
         applyTint()
         control.applyStyle()
-        if (wakeIntro) { wakeIntro = false; playIntro(wake = true) }
+        if (getSystemService(android.os.PowerManager::class.java).isInteractive) consumeWakeIntro()
         returnPivot?.let { p -> returnPivot = null; if (intro == null && !Device.isLowEnd(this)) zoomBack(p) }
         resumed = true
         prefs.homeInFront = true
@@ -1412,6 +1440,7 @@ class HomeActivity : Activity(), TileAdapter.Listener, FolderView.Callbacks {
     override fun onPause() {
         // Leaving for another app (or standby) ends the intro rather than leaving it half played.
         intro?.finish()
+        if (!getSystemService(android.os.PowerManager::class.java).isInteractive) armWakeIntro()
         resumed = false
         prefs.homeInFront = false
         main.removeCallbacks(idleFrame)

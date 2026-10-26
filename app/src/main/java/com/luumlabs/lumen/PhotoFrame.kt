@@ -180,9 +180,10 @@ class FrameActivity : Activity() {
         KeyEvent.KEYCODE_HOME -> super.dispatchKeyEvent(e)
         // A power key the system passed on (RemoteKeys): the frame closes and the TV sleeps.
         KeyEvent.KEYCODE_POWER, KeyEvent.KEYCODE_TV_POWER, KeyEvent.KEYCODE_SLEEP, KeyEvent.KEYCODE_SOFT_SLEEP -> {
-            if (e.action == KeyEvent.ACTION_UP && !e.isCanceled) {
+            if (RemoteKeys.pressed(e)) {
                 finish()
-                RemoteKeys.standby(this, e.keyCode) {}
+                // Without local debugging, closing is all it can do; on the home screen the key offers more.
+                if (Prefs(this).adbAuthorized) RemoteKeys.standby(this, e) {}
             }
             true
         }
@@ -213,8 +214,8 @@ class PhotoDream : DreamService() {
     override fun dispatchKeyEvent(e: KeyEvent): Boolean {
         // A power key the system passed on (RemoteKeys): to sleep, not back to the home screen.
         if (RemoteKeys.isPower(e.keyCode)) {
-            if (e.action == KeyEvent.ACTION_UP && !e.isCanceled) {
-                RemoteKeys.standby(this, e.keyCode) {}
+            if (RemoteKeys.pressed(e)) {
+                if (Prefs(this).adbAuthorized) RemoteKeys.standby(this, e) {}
                 finish()
             }
             return true
